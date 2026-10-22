@@ -1,0 +1,905 @@
+<title>Qwen3.8-27B on an RTX 3060</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column (~72ch) with full-width figure blocks; lab-notebook tone, data first. */
+:root {
+  --bg: #f7f8f7; --surface: #fcfcfb; --ink: #121615; --ink-2: #4b5452; --muted: #7c8583;
+  --rule: #dde2e0; --axis: #c1c8c5; --accent: #1d6a7e; --accent-ink: #ffffff; --chip: #e9eeec;
+  --band-fits: rgba(12,163,12,0.09); --band-wstream: rgba(29,106,126,0.10); --band-hidden: rgba(42,120,214,0.09);
+  --band-cliff: rgba(250,178,25,0.16); --band-drop: rgba(208,59,59,0.11);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --est: #5d6664; --seg-reserve: #9aa3a1; --seg-weights: #3b4a57; --seg-spec: #6250d6; --seg-kv: #2a78d6; --seg-slots: #86b6ef; --seg-free: #e4e9e7; --seg-host: #eb6834;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111414; --surface: #181c1b; --ink: #eef1f0; --ink-2: #c1c8c5; --muted: #8b9491;
+    --rule: #2b3231; --axis: #3b4442; --accent: #5fb3c9; --accent-ink: #0b1213; --chip: #222928;
+    --band-fits: rgba(12,163,12,0.14); --band-wstream: rgba(95,179,201,0.13); --band-hidden: rgba(57,135,229,0.14);
+    --band-cliff: rgba(250,178,25,0.15); --band-drop: rgba(230,103,103,0.15);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --est: #a7b0ad; --seg-reserve: #5d6664; --seg-weights: #8fa3b3; --seg-spec: #9085e9; --seg-kv: #3987e5; --seg-slots: #1c5cab; --seg-free: #262d2c; --seg-host: #d95926;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111414; --surface: #181c1b; --ink: #eef1f0; --ink-2: #c1c8c5; --muted: #8b9491;
+  --rule: #2b3231; --axis: #3b4442; --accent: #5fb3c9; --accent-ink: #0b1213; --chip: #222928;
+  --band-fits: rgba(12,163,12,0.14); --band-wstream: rgba(95,179,201,0.13); --band-hidden: rgba(57,135,229,0.14);
+  --band-cliff: rgba(250,178,25,0.15); --band-drop: rgba(230,103,103,0.15);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --est: #a7b0ad; --seg-reserve: #5d6664; --seg-weights: #8fa3b3; --seg-spec: #9085e9; --seg-kv: #3987e5; --seg-slots: #1c5cab; --seg-free: #262d2c; --seg-host: #d95926;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15.5px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 64px; }
+.wrap { max-width: 1120px; margin: 0 auto; }
+.col { max-width: 72ch; }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3.1rem); letter-spacing: -0.01em; }
+h2 { font-size: 1.75rem; }
+h3 { font-size: 1.15rem; }
+p { margin: 0; }
+.eyebrow { font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { display: grid; gap: 18px; padding-block: 44px 8px; border-top: 1px solid var(--rule); margin-top: 36px; }
+header { display: grid; gap: 18px; padding-block: 40px 8px; }
+.lede { font-size: 1.12rem; color: var(--ink-2); max-width: 66ch; }
+.mono, code { font-family: var(--mono); font-size: 0.86em; }
+code { background: var(--chip); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.num { font-variant-numeric: tabular-nums; }
+a { color: var(--accent); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; min-width: 0; }
+.tile .k { font-family: var(--mono); font-size: 0.76rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.tile .v { font-family: var(--display); font-size: 1.9rem; font-weight: 600; }
+.tile .v small { font-family: var(--body); font-size: 0.85rem; font-weight: 400; color: var(--muted); }
+.tile .d { color: var(--ink-2); font-size: 0.9rem; }
+.from { color: var(--muted); font-weight: 500; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; }
+.fig { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.fig h3 { font-size: 1rem; }
+.cap { font-size: 0.86rem; color: var(--muted); }
+.chartbox { position: relative; height: 540px; min-width: 0; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 500; background: var(--surface); position: sticky; top: 0; }
+tr:last-child td { border-bottom: 0; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+button, select, input { font: inherit; color: inherit; }
+.chip { border: 1px solid var(--rule); background: var(--chip); border-radius: 999px; padding: 4px 11px; font-size: 0.82rem; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chip:focus-visible, select:focus-visible, input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cat { display: inline-block; font-family: var(--mono); font-size: 0.7rem; padding: 2px 7px; border-radius: 4px; background: var(--chip); white-space: nowrap; border-left: 3px solid var(--c, var(--muted)); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.toolbar label { display: flex; gap: 6px; align-items: center; font-size: 0.88rem; }
+.note { border-left: 3px solid var(--axis); padding: 6px 12px; color: var(--ink-2); font-size: 0.9rem; }
+ol.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 10px; }
+ol.steps li::marker { font-family: var(--mono); color: var(--accent); }
+/* VRAM bars */
+.bars { display: grid; gap: 14px; }
+.barrow { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: center; }
+.barrow .lab { font-family: var(--mono); font-size: 0.82rem; color: var(--ink-2); }
+.bar { position: relative; height: 30px; display: flex; min-width: 0; }
+.bar .seg { height: 100%; border-right: 2px solid var(--surface); min-width: 2px; }
+.bar .seg.host { background: repeating-linear-gradient(135deg, var(--seg-host) 0 5px, transparent 5px 10px); border: 1px solid var(--seg-host); border-left: 0; }
+.cardedge { position: absolute; top: -6px; bottom: -6px; border-left: 2px dashed var(--ink); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.82rem; color: var(--ink-2); }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+/* estimator */
+.params { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px 16px; }
+.field { display: grid; gap: 4px; min-width: 0; }
+.field label { font-size: 0.8rem; color: var(--ink-2); }
+.field input, .field select { width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.field .hint { font-size: 0.74rem; color: var(--muted); }
+details { border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); padding: 10px 14px; }
+details > summary { cursor: pointer; font-weight: 500; }
+details[open] > summary { margin-bottom: 10px; }
+.readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.readout div { background: var(--chip); border-radius: 6px; padding: 8px 10px; }
+.readout .k { font-size: 0.74rem; color: var(--muted); }
+.readout .v { font-family: var(--mono); font-size: 1rem; }
+.err-ok { color: var(--ink); } .err-warn { color: #b25e00; } .err-bad { color: #c03030; }
+:root[data-theme="dark"] .err-warn { color: #fab219; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .err-warn { color: #fab219; } :root:not([data-theme="light"]) .err-bad { color: #ec835a; } }
+:root[data-theme="dark"] .err-bad { color: #ec835a; }
+.diagram svg { width: 100%; height: auto; max-width: 100%; display: block; }
+.diagram text { font-family: var(--mono); font-size: 12px; fill: var(--ink); }
+.diagram .sub { fill: var(--muted); font-size: 11px; }
+.diagram .box { fill: var(--chip); stroke: var(--axis); stroke-width: 1.2; }
+.diagram .boxa { fill: var(--surface); stroke: var(--accent); stroke-width: 1.6; }
+.diagram .wire { stroke: var(--seg-host); stroke-width: 3; fill: none; }
+.diagram .wire2 { stroke: var(--accent); stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+@media (max-width: 560px) { .chartbox { height: 380px; } h2 { font-size: 1.45rem; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Inference report · RTX 3060 12 GiB · PCIe Gen3 x16 · llama.cpp fork · 2026-10-22</div>
+  <h1>Qwen3.8-27B on an RTX 3060</h1>
+  <p class="lede">A 27-billion-parameter hybrid model on a single 12 GiB consumer card, at contexts up to 200K tokens, with output identical to plain greedy decoding. The two limits are VRAM and the PCIe link. This report covers what was changed in llama.cpp to work around them, what each change bought, and where it helps.</p>
+  <div class="tiles" id="tiles"></div>
+  <p class="cap">"Stock" means the official llama.cpp release binary (b11717) at its best settings for this card: DFlash d7, q4_0 KV kept in VRAM, and only as many FFN layers on the CPU as it takes to fit. Headline decode numbers are greedy runs on a code prompt with thinking off, which drafts very well (about 6 tokens per step). A real coding-agent session with the model's default xhigh thinking and sampling accepts about 3 tokens per step and averages <strong>23-26 t/s</strong> (section <a href="#agent">6b</a>).</p>
+</header>
+
+<section id="problem">
+  <div class="eyebrow">1 · The problem</div>
+  <h2>12 GiB of VRAM, and a 13.3 GB/s link behind it</h2>
+  <div class="col" style="display:grid;gap:12px">
+    <p>Qwen3.8-27B has 64 layers: 48 GDN (recurrent) layers with a fixed-size state, and 16 full-attention layers that keep a KV cache. At q4_0 for K and V, each attention layer stores <span class="mono">1,152 B</span> per token, so the cache costs <span class="mono">18,432 B</span> per token across all 16 layers.</p>
+    <p>With DFlash (or no speculation) the loader skips the 0.70 GiB MTP head in the model file, so the IQ3_XXS weights take 9.0 GiB of the card (9,228 MiB). The Windows display driver's CUDA context, the recurrent state and compute buffers take about 1.0 GiB, and the DFlash drafter plus speculative rollback state take another 0.68 GiB. What is left for the KV cache is about <span class="mono">1.3 GiB</span>: enough for 64K tokens, not for 128K or 200K.</p>
+    <p>KV that doesn't fit has to live in host RAM and cross the PCIe link on every decode step, once per staged layer. At 200K one layer is 225 MiB, which is <strong>17.7 ms per step</strong> at the measured 13.3 GB/s. The 200K configuration stages 13-14 of the 16 layers, so about 250 ms of a 282 ms step is the PCIe stream, and the GPU sits idle for about 76% of the step.</p>
+    <p>Stock llama.cpp's best answer is to keep the KV on the card and move FFN layers to the CPU until everything fits. That works, but every CPU FFN layer runs its matmul on six CPU cores, 65-90 ms per verify step each, where this fork copies the same 38 MiB tensor to the GPU in about 3 ms under compute. The official b11717 binary with DFlash d7 gets 43.2 t/s at 8K, 10.4 at 64K, 4.7 at 128K and 2.7 at 200K (section <a href="#stock">4b</a>). Host KV (<span class="mono">--no-kv-offload</span>) is slower still: 3.6 t/s at 48K.</p>
+    <p>The IQ3_S model (11.28 GiB) has a second wall: its weights alone don't leave room for the KV cache, the recurrent state and a drafter. The old setup ran 2-4 GDN layers on the CPU, at about 19 ms per token for each one.</p>
+  </div>
+  <div class="fig">
+    <h3>Where the 12 GiB goes: IQ3_XXS with DFlash</h3>
+    <div class="bars" id="vrambars"></div>
+    <div class="legend" id="vramlegend"></div>
+    <p class="cap">MiB, from the loader's buffer accounting and the fitted budget (the dashed line is the 12,288 MiB card). The hatched part past the card edge is KV kept in pinned host RAM; every byte of it crosses PCIe on every decode step. At 200K the server keeps 3 layers resident plus 2 staging slots and stages 13.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>context</th><th class="n">KV per attention layer</th><th class="n">all 16 layers</th><th class="n">PCIe time per staged layer</th></tr></thead>
+    <tbody id="kvtable"></tbody>
+  </table></div>
+</section>
+
+<section id="approach">
+  <div class="eyebrow">2 · The approach</div>
+  <h2>Stream only what each layer needs, and make every stream carry more tokens</h2>
+  <div class="grid2">
+    <ol class="steps col">
+      <li><strong>Stream KV, don't offload layers.</strong> Each staged layer's KV is copied into one of two device slots just before its attention runs, on side streams, so the copy hides behind other layers' compute.</li>
+      <li><strong>Make every MiB of VRAM count.</strong> Remove scratch buffers, shrink the rollback state, put the MTP head's cache in a window, place the output head on purpose. Each 144-225 MiB freed is one more resident KV layer, worth 17.7 ms per step at 200K.</li>
+      <li><strong>Make one step carry many tokens.</strong> A verify pass costs the same PCIe whether it checks 1 token or 8. A drafter that gets 4-6 tokens accepted per step divides the PCIe cost per token by 4-6. DFlash drafts a whole 8-token block in one ~10-15 ms call.</li>
+      <li><strong>Stay exact.</strong> Speculative output equals plain greedy output, token for token, at every context. Every speed flag is opt-in, and with all flags off the default path is unchanged.</li>
+      <li><strong>For IQ3_S, stream weights too.</strong> Single large weight tensors, spread through the model, stream through two 48 MiB slots and are prefetched inside the CUDA graph, instead of running layers on the CPU.</li>
+    </ol>
+    <div class="fig diagram">
+      <h3>One decode step at 200K</h3>
+      <svg viewBox="0 0 460 300" role="img" aria-label="Diagram: KV for staged layers lives in pinned host RAM and crosses PCIe into two GPU slots; resident layers, weights and the DFlash drafter stay on the GPU.">
+        <rect class="box" x="10" y="20" width="150" height="250" rx="8"/>
+        <text x="22" y="44">Host RAM (pinned)</text>
+        <text class="sub" x="22" y="62">DDR4-2400, 1 channel</text>
+        <rect class="boxa" x="22" y="80" width="126" height="150" rx="5"/>
+        <text x="32" y="102">staged KV</text>
+        <text class="sub" x="32" y="120">13 layers x 225 MiB</text>
+        <text class="sub" x="32" y="138">= 2.9 GiB</text>
+        <text class="sub" x="32" y="170">only the prefix that</text>
+        <text class="sub" x="32" y="186">changed is copied</text>
+        <rect class="box" x="290" y="20" width="160" height="250" rx="8"/>
+        <text x="302" y="44">GPU, 12 GiB</text>
+        <rect class="boxa" x="302" y="60" width="136" height="42" rx="5"/>
+        <text x="312" y="78">2 staging slots</text>
+        <text class="sub" x="312" y="94">copy n+1 while n runs</text>
+        <rect class="box" x="302" y="112" width="136" height="34" rx="5"/>
+        <text x="312" y="134">resident KV, 3 layers</text>
+        <rect class="box" x="302" y="154" width="136" height="34" rx="5"/>
+        <text x="312" y="176">weights 9.0 GiB</text>
+        <rect class="box" x="302" y="196" width="136" height="60" rx="5"/>
+        <text x="312" y="216">DFlash drafter</text>
+        <text class="sub" x="312" y="232">8-token block,</text>
+        <text class="sub" x="312" y="248">~15 ms per step</text>
+        <path class="wire" d="M150 150 C 220 150, 220 81, 300 81"/>
+        <text x="176" y="128">PCIe Gen3 x16</text>
+        <text class="sub" x="176" y="144">13.3 GB/s</text>
+        <text class="sub" x="176" y="196">~230 ms per step</text>
+        <text class="sub" x="176" y="212">for 6 accepted tokens</text>
+        <path class="wire2" d="M300 226 C 250 226, 250 290, 370 290 L 370 270"/>
+      </svg>
+      <p class="cap">Copies run on side streams with two slots, so layer n+1's KV arrives while layer n computes. One verify pass checks the drafter's whole block, so the same PCIe stream pays for about 6 tokens.</p>
+    </div>
+  </div>
+</section>
+
+<section id="changes">
+  <div class="eyebrow">3 · What changed</div>
+  <h2>Changes over stock llama.cpp</h2>
+  <p class="col">Every environment variable defaults to off, which is stock behaviour. Section numbers point into the project log (<span class="mono">report.md</span>).</p>
+  <div class="chips" id="catchips" role="group" aria-label="Filter by category"></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>category</th><th>change</th><th>what it does</th><th>measured effect</th><th>where it helps</th><th title="section numbers in report.md, the project log">report.md §</th></tr></thead>
+    <tbody id="changetable"></tbody>
+  </table></div>
+  <h3>Tested and rejected</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>idea</th><th>result</th><th>why</th></tr></thead>
+    <tbody id="rejecttable"></tbody>
+  </table></div>
+</section>
+
+<section id="measured">
+  <div class="eyebrow">4 · Measured</div>
+  <h2>Decode and prefill speed against context</h2>
+  <div class="toolbar">
+    <div class="chips" id="m1model" role="group" aria-label="Model"></div>
+    <label><input type="checkbox" id="m1swap"> put context on the Y axis</label>
+    <label><input type="checkbox" id="m1est" checked> show estimate (default parameters)</label>
+    <span class="cap">Shade regions for</span><div class="chips" id="m1band" role="group" aria-label="KV pair for the shaded regions"></div>
+  </div>
+  <div class="grid2">
+    <div class="fig"><h3 id="m1dt">Decode, tokens/s</h3><div class="chartbox"><canvas id="m1d" aria-label="Decode tokens per second against context length, measured"></canvas></div></div>
+    <div class="fig"><h3 id="m1pt">Prefill, tokens/s</h3><div class="chartbox"><canvas id="m1p" aria-label="Prefill tokens per second against context length, measured"></canvas></div></div>
+  </div>
+  <div class="note col" id="m1note"></div>
+  <details><summary>Data table for these charts</summary><div class="tablewrap"><table><thead><tr><th>series</th><th class="n">context</th><th class="n">decode t/s</th><th class="n">prefill t/s</th><th>note</th></tr></thead><tbody id="m1table"></tbody></table></div></details>
+</section>
+
+<section id="stock">
+  <div class="eyebrow">4b · Against stock</div>
+  <h2>Stock llama.cpp at its best settings</h2>
+  <p class="col">The official b11717 release binary, same IQ3_XXS model, same DFlash drafter at draft length 7, q4_0 K and V kept in VRAM, flash attention on. Where the model does not fit, FFN layers are spread onto the CPU, using the smallest count that loads. Putting all 48 GDN layers on the CPU instead was not used: it moves more bytes, and the KV stays in VRAM either way. Both columns ran the same prompts for 128 greedy tokens and produced identical text.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>context</th><th>stock setup</th><th class="n">stock t/s</th><th class="n">stock ms/step</th><th class="n">fork t/s</th><th class="n">fork ms/step</th><th class="n">fork is</th><th class="n">stock prefill t/s</th></tr></thead>
+    <tbody>
+      <tr><td>8K</td><td>all on GPU</td><td class="n">43.16</td><td class="n">140</td><td class="n">54.92</td><td class="n">110</td><td class="n"><strong>1.27x</strong></td><td class="n">460.9</td></tr>
+      <tr><td>64K</td><td>12 FFN layers on CPU</td><td class="n">10.35</td><td class="n">585</td><td class="n">41.30</td><td class="n">114</td><td class="n"><strong>3.99x</strong></td><td class="n">238.5</td></tr>
+      <tr><td>128K</td><td>32 FFN layers on CPU</td><td class="n">4.70</td><td class="n">1,287</td><td class="n">30.18</td><td class="n">162</td><td class="n"><strong>6.42x</strong></td><td class="n">148.3</td></tr>
+      <tr><td>200K</td><td>44 FFN layers on CPU</td><td class="n">2.74</td><td class="n">1,852</td><td class="n">18.82</td><td class="n">281</td><td class="n"><strong>6.87x</strong></td><td class="n">111.2</td></tr>
+    </tbody>
+  </table></div>
+  <div class="col" style="display:grid;gap:10px">
+    <p><strong>Where the model fits, the gap is the matmul route.</strong> At 8K everything else (DFlash d7, q4_0 KV, flash attention) is already stock; the 1.27x is MMQ for every small batch (<span class="mono">GGML_CUDA_PREFER_MMQ</span>), which stock has no switch for (<span class="mono">GGML_CUDA_FORCE_MMQ</span> changes nothing here).</p>
+    <p><strong>Where it doesn't, the CPU is on the critical path.</strong> The fork's step stays between 110 and 281 ms because its streamed weights and staged KV copy under GPU compute. Each stock CPU FFN layer adds 65-90 ms of CPU matmul per verify step, so the stock step grows to 1.85 s at 200K. No stock flag tested (<span class="mono">FORCE_MMQ</span>, <span class="mono">-t 12</span>, <span class="mono">--n-cpu-ffn</span>, MTP d4 instead of DFlash) changes the ordering; at 200K the stock setup has 182 MiB of VRAM left.</p>
+    <p><strong>With thinking on, the absolute numbers drop for both, but the ratio comes from step time.</strong> Both setups use the same drafter, so a real agent session accepts about 3 tokens per step on either. At the measured step times that is roughly 27 vs 21 t/s at 8K and 26 vs 5 t/s at 64K (estimates from the step times above, not measured runs).</p>
+    <p class="cap">Report sections 59 and 59.1. The fork rows are decode on restored contexts; for prefill, the fork runs 450 t/s at 8.8K with DFlash active (section 4).</p>
+  </div>
+</section>
+
+<section id="kvquant">
+  <div class="eyebrow">4c · KV quantisation</div>
+  <h2>q4_0/q4_0 stays the default; q8 K is a quality option that is free at short context</h2>
+  <div class="col" style="display:grid;gap:10px">
+    <p><strong>What the higher quant buys.</strong> Next-token distributions compared with f16 KV over 32 positions at 8K (teacher-forced, top-20 support). All three agree with f16 on the top token at every position; the differences are in the probabilities. These shifts are likely one to two orders of magnitude below what typical 3-bit weight quants cost (not measured for this model), so q4_0/q4_0 is good enough. The test is short-context only; no long-context recall test was run.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>KV</th><th class="n">top token same as f16</th><th class="n">mean KL divergence</th><th class="n">largest probability change</th><th class="n">bytes vs q4/q4</th></tr></thead>
+    <tbody>
+      <tr><td>q8_0/q8_0</td><td class="n">32/32</td><td class="n">0.00011</td><td class="n">1.6 points</td><td class="n">1.89x</td></tr>
+      <tr><td>q8_0/q4_0</td><td class="n">32/32</td><td class="n">0.00040</td><td class="n">2.4 points</td><td class="n">1.44x</td></tr>
+      <tr><td>q5_0/q4_0</td><td class="n">not measured</td><td class="n">-</td><td class="n">-</td><td class="n">1.11x</td></tr>
+      <tr><td>q4_0/q4_0</td><td class="n">32/32</td><td class="n">0.00102</td><td class="n">3.2 points</td><td class="n">1.00x</td></tr>
+    </tbody>
+  </table></div>
+  <div class="col" style="display:grid;gap:10px">
+    <p><strong>The q8 slowdown was routing, not size.</strong> <span class="mono">LLAMA_FA_VEC_QUANT_KV</span> sends quantized KV through the vector kernel, which has a fast path only for q4_0, so q8 KV fell back to a slow generic kernel for verify and prefill. With it unset, q8 takes the MMA kernel. <span class="mono">serve_prod.ps1 -Ctk q8_0</span> now unsets it on its own; the q4_0/q4_0 command is unchanged.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>context</th><th>setup (IQ3_XXS, DFlash d7)</th><th class="n">q4_0/q4_0</th><th class="n">q8_0/q4_0, old route</th><th class="n">q8_0/q4_0, MMA route</th><th class="n">q8 cost at the same setup</th></tr></thead>
+    <tbody>
+      <tr><td>8K</td><td>all resident</td><td class="n">110.1 ms/step, 457 PP</td><td class="n">125.7 ms, 325 PP</td><td class="n">111.7 ms, 461 PP</td><td class="n">+1.5% ms/step</td></tr>
+      <tr><td>32K</td><td>all resident</td><td class="n">116.5 ms, 411 PP</td><td class="n">181.0 ms, 188 PP</td><td class="n">124.8 ms, 409 PP</td><td class="n">+7% ms/step</td></tr>
+      <tr><td>64K</td><td>12 of 16 KV layers staged</td><td class="n">43.52 t/s, 308 PP</td><td class="n">-</td><td class="n">38.65 t/s, 309 PP</td><td class="n">-11% t/s</td></tr>
+      <tr><td>128K</td><td>14 staged + 513 MiB weights streamed</td><td class="n">25.73 t/s, 241 PP</td><td class="n">-</td><td class="n">17.59 t/s, 242 PP</td><td class="n">-32% t/s</td></tr>
+    </tbody>
+  </table></div>
+  <div class="col" style="display:grid;gap:10px">
+    <p><strong>Why q8 gets expensive at depth.</strong> Staged KV crosses PCIe on every step, and q8 K is 44% more of it. The MMA route also converts the whole K and V tensors to f16 on each call, and the memory pool keeps that buffer: 538 MiB at 128K, which is why 128K fits only with weights streamed. q8_0/q8_0 at 32K with 10 of 16 layers staged runs at the same speed as q4_0/q4_0 at the same setup (19.80 vs 19.66 t/s). Converting only the band the kernel reads would cut the buffer to about 8 MiB; it is scoped, not built. A q8 or q5 split-K decode kernel was not built either: q4_0/q4_0 is the production KV.</p>
+    <p class="cap">Report section 60 (60.1-60.6). The 32K rows ran a different text from the 8K rows, so they are compared in ms per step.</p>
+  </div>
+</section>
+
+<section id="estimator">
+  <div class="eyebrow">5 · Estimate</div>
+  <h2>What another card would do</h2>
+  <p class="col">The same charts, computed from a small model of the step: weight read time, attention, drafting, and the PCIe copies that don't hide behind compute. Change the hardware or model below. The defaults reproduce the measured points within about 10% (table at the end of this section); everything beyond those points is an estimate.</p>
+  <div class="params" id="params"></div>
+  <details id="advanced"><summary>Model constants (fitted on this machine)</summary><div class="params" id="params2"></div></details>
+  <details id="drafterbox"><summary>Drafters: add your own</summary>
+    <div style="display:grid;gap:10px">
+      <div class="tablewrap"><table><thead><tr><th>drafter</th><th class="n">weights MiB</th><th class="n">draft ms/step</th><th>source</th></tr></thead><tbody id="draftertable"></tbody></table></div>
+      <div class="params">
+        <div class="field"><label for="dname">name</label><input id="dname" value="my drafter"></div>
+        <div class="field"><label for="dmib">weights (MiB)</label><input id="dmib" type="number" value="800" min="0"></div>
+        <div class="field"><label for="dms">draft time per step (ms)</label><input id="dms" type="number" value="12" min="0" step="0.5"></div>
+        <div class="field" style="align-content:end"><button class="chip" id="dadd" type="button">Add drafter</button></div>
+      </div>
+    </div>
+  </details>
+  <div class="toolbar">
+    <label><input type="checkbox" id="e1swap"> put context on the Y axis</label>
+    <label><input type="checkbox" id="e1meas" checked> overlay measured points</label>
+    <label><input type="checkbox" id="e1nospec" checked> show no-speculation line (q4_0/q4_0)</label>
+    <span class="cap">Shade regions for</span><div class="chips" id="e1band" role="group" aria-label="KV pair for the shaded regions"></div>
+  </div>
+  <div class="grid2">
+    <div class="fig"><h3>Estimated decode, tokens/s</h3><div class="chartbox"><canvas id="e1d" aria-label="Estimated decode tokens per second against context"></canvas></div></div>
+    <div class="fig"><h3>Estimated prefill, tokens/s</h3><div class="chartbox"><canvas id="e1p" aria-label="Estimated prefill tokens per second against context"></canvas></div></div>
+  </div>
+  <div class="fig">
+    <div class="toolbar"><label for="inspect">Inspect context</label><input id="inspect" type="range" min="1024" max="262144" step="1024" value="204800" style="flex:1;min-width:160px"><span class="mono" id="inspectv"></span>
+      <select id="inspectkv" aria-label="KV pair to inspect"><option>q4_0/q4_0</option><option>q8_0/q4_0</option><option>q8_0/q8_0</option><option>q5_0/q4_0</option></select></div>
+    <div class="readout" id="readout"></div>
+  </div>
+  <div class="note col" id="e1note"></div>
+  <h3>Fit against the measured points (default hardware, current model constants)</h3>
+  <div class="tablewrap"><table><thead><tr><th>point</th><th class="n">context</th><th class="n">measured</th><th class="n">estimate</th><th class="n">error</th><th>basis</th></tr></thead><tbody id="fittable"></tbody></table></div>
+  <details><summary>How the estimate works</summary><div class="col" style="display:grid;gap:8px;font-size:0.92rem">
+    <p><strong>VRAM.</strong> KV capacity = VRAM - weights on the GPU - driver/runtime reserve - drafter overhead. Weights on the GPU are the model file minus the MTP head, plus the head only in MTP mode: the loader skips it otherwise (9,228 vs 9,949 MiB for IQ3_XXS, 10,828 MiB for IQ3_S in DFlash runs). DFlash adds its drafter weights plus 163 MiB of rollback state.</p>
+    <p><strong>Placement.</strong> Either all 16 KV layers stay resident, or r of them do, plus two staging slots, and 16 - r are staged. Weights are streamed only when nothing else fits, through two 48 MiB slots, up to the streamable limit. The placement with the shortest step is used.</p>
+    <p><strong>Step.</strong> compute = trunk weight read time x k (2.28 for an exact 8-column verify, 1.93 for an exact 1-token step) + attention per 1K tokens of context + draft time + host time. PCIe = (staged KV + streamed weights) / link rate, with the link rate capped at host DRAM bandwidth / 1.4. A fraction of the compute (overlap) hides copies: step = compute + PCIe - min(overlap x GPU compute, PCIe). Decode t/s = accepted tokens per step / step.</p>
+    <p><strong>KV pairs.</strong> Only q4_0/q4_0 has the dedicated split-K decode kernel. Q8 pairs run the generic vector kernel, whose attention cost per 1K tokens was measured for q8_0/q4_0 (2.0 ms verify, 0.76 ms at n=1) and is assumed for q8_0/q8_0 (2.4 / 0.9). Those two are rough. q5_0/q4_0 (5.5-bit K, 11% more KV bytes than q4_0/q4_0) also runs the vector kernel; its constants are fitted to the measured IQ3_XXS points at 8K, 32K and 64K (MTP d4 and no speculation): 3.6 ms verify, 0.47 ms at n=1, prefill quadratic term +2.15e-7, all within 2% of the measurements. Those were measured with LLAMA_FA_VEC_QUANT_KV set, which forces every q5/q8 verify and prefill batch through the vector kernel. Report 60.1 found that unsetting it moves q8_0/q4_0 verify onto the MMA kernel at near q4 cost (+1.6 ms/step at 8K, +8 ms at 32K, prefill unchanged); that route is the default here (0.50 ms per 1K verify for q8_0/q4_0, fitted; 0.45 for q5_0/q4_0 and 0.55 for q8_0/q8_0, assumed). Pick the old route in the parameters to see the vector-kernel curves. That route has one memory cost: it converts the whole K and V tensors to f16 on every call and the allocation stays in the pool, so it needs 4 KiB per token of context on top of the KV (256 MiB at 64K, 512 MiB at 128K). The estimator subtracts that from KV capacity. Measured at depth (report 60.6): q8_0/q4_0 costs -11% at 64K and -32% at 128K against q4_0/q4_0 at the same placement, and at 128K it fits only with 513 MiB of weights streamed. Converting only the band the kernel reads would remove the scratch; it is scoped, not built.</p>
+    <p><strong>Prefill.</strong> T(n) = 1.756 ms x n + 6.70e-9 s x n² at 31 effective TFLOPS (the fit to the measured resident curve), scaled by the ubatch efficiency, plus 7.4% (DFlash) or 8.6% (MTP) for feature extraction, plus the per-ubatch copies of streamed weights and of the staged layers' prefix, of which 35% overlap compute. Q8 pairs add the vector kernel's attention term (measured for q8_0/q4_0 at 8K); q5_0/q4_0 adds its own, fitted at 8K-64K.</p>
+  </div></details>
+</section>
+
+<section id="server">
+  <div class="eyebrow">6 · In a real server</div>
+  <h2>llama-server, started the way a user would, over the OpenAI API</h2>
+  <p class="col">Three launch profiles in <span class="mono">tests\serve_prod.ps1</span> (8K chat on IQ3_XXS, 200K on IQ3_XXS, 64K on IQ3_S), driven with streaming <span class="mono">/v1/chat/completions</span> requests. 58 requests over 9 server sessions; the only error was a deliberate request past the context limit.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>check</th><th>result</th></tr></thead>
+    <tbody>
+      <tr><td>One 200K server for short chats (8 prompts of 4-6K tokens)</td><td>Prefill 375 vs 446 t/s against a <span class="mono">-c 32768</span> server (-15.8%: the staged KV copies). Decode was -9.6% until <span class="mono">LLAMA_FA_Q4_SPLIT_TOKENS=2048</span> was set; with it, 36.54 vs 36.28 t/s. Set it on any long-context server (the launcher's 200K profile needs it passed with <span class="mono">-Env</span>).</td></tr>
+      <tr><td>A conversation grown to 200K over 16 turns of real repo text</td><td>Exact prefix reuse on every turn, VRAM flat at 11,479 MiB for 20 minutes, new turns of 9-16K tokens in 43-79 s. Step time 131 ms at 15K to 283 ms at 200K, as benchmarked; decode 24.8 to 9.8 t/s because this reasoning-heavy text accepts only 2.8-3.9 tokens per step. The 17th turn was refused cleanly (HTTP 400, exceeds context).</td></tr>
+      <tr><td>Exactness through HTTP</td><td>Speculative and non-speculative servers return identical text and identical reasoning, 768 tokens on two prompts; speculation is 2.9-3.7x faster.</td></tr>
+      <tr><td>Sampling (temperature 0.7, top_p 0.9)</td><td>All three profiles stable; 23-26 t/s mean decode at 2.4-3.2 tokens per step.</td></tr>
+      <tr><td>Thinking output</td><td>The answer arrives in <span class="mono">content</span> and the thinking in <span class="mono">reasoning_content</span>. With thinking on (the default) and max_tokens 512, the thinking consumed the whole budget on 8 of 8 short prompts. <span class="mono">--reasoning-budget 0</span> gave 8/8 answers at 41 t/s.</td></tr>
+      <tr><td>IQ3_S 64K profile</td><td>The streamed set measured on restored snapshots (612 MiB) ran out of memory on the first real prefill, because a real request allocates the prefill buffers. Re-sized to 797 MiB streamed and <span class="mono">-ub 32</span>: 27.4 t/s at 12K and 23.65 t/s at 64K.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="cap">Report section 58. Raw JSON and server logs in <span class="mono">results\rw</span>.</p>
+</section>
+
+<section id="agent">
+  <div class="eyebrow">6b · A real agent session</div>
+  <h2>With thinking on, expect 23-26 t/s, not 54</h2>
+  <p class="col">The same IQ3_XXS server (96K context, KV budget 1100 MiB, exact mode), driven by the pi coding agent: about a 6K-token system prompt plus the task, the model's default <span class="mono">xhigh</span> reasoning effort, and the agent's own sampling settings. The task was one long creative coding prompt (a voxel-art HTML scene), followed by the agent's own follow-up turns. Decode numbers are the server's own timings.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>run</th><th class="n">context</th><th class="n">generated</th><th class="n">decode t/s</th><th class="n">tokens per step</th><th>decode by quarter of the reply</th></tr></thead>
+    <tbody>
+      <tr><td>DFlash d7, main reply</td><td class="n">6.7K to 41.7K</td><td class="n">34,935</td><td class="n"><strong>26.1</strong></td><td class="n">3.03</td><td>20.7, 23.4, 26.0, 34.2</td></tr>
+      <tr><td>DFlash d7, 15 follow-up turns</td><td class="n">42K to 50K</td><td class="n">6,014</td><td class="n">24.6</td><td class="n">2.5-6.0</td><td>-</td></tr>
+      <tr><td>DFlash d7, 13 turns of a later session</td><td class="n">56K to 69K</td><td class="n">12,793</td><td class="n">23.3</td><td class="n">2.3-6.7</td><td>step 124 to 130 ms</td></tr>
+      <tr><td>MTP d4, same prompt</td><td class="n">6.7K to 49.0K</td><td class="n">42,314</td><td class="n">24.8</td><td class="n">2.93</td><td>20.9, 23.2, 22.6, 32.3</td></tr>
+      <tr><td>for reference: greedy code prompt, thinking off</td><td class="n">8.8K</td><td class="n">512</td><td class="n">54.2</td><td class="n">6.1</td><td>-</td></tr>
+    </tbody>
+  </table></div>
+  <div class="col" style="display:grid;gap:10px">
+    <p><strong>The step time is what the benchmarks measured; the acceptance is not.</strong> Decode steps took 108-112 ms at 7K context and 124-130 ms at 56-69K, matching the benchmark step times (110 ms at 8K, 114 ms at 64K with all KV on the card; the extra 10% at 64K is the 96K headroom, 6 of 16 KV layers staged). What changes is how many drafted tokens are accepted: about 3 per step instead of 6, because thinking text and sampled output are hard to predict.</p>
+    <p><strong>Speed climbs as the reply moves from thinking to code.</strong> The first half of each reply, mostly thinking, ran at 21-23 t/s with either drafter; the last quarter, mostly code, ran at 32-34 t/s.</p>
+    <p><strong>MTP is no better on thinking.</strong> Both drafters accept about the same per step during thinking. MTP accepts a larger share of its drafts (48% vs 29%) but drafts 4 tokens instead of 7 and spends 19 ms drafting against 10 ms, so DFlash stays about 5% ahead overall.</p>
+    <p><strong>The levers are on the client.</strong> Temperature 0 and a lower reasoning effort (<span class="mono">medium</span> or <span class="mono">low</span>) raise acceptance; the server configuration is already at its measured step time. This model's chat template accepts only <span class="mono">xhigh</span>, <span class="mono">medium</span> and <span class="mono">low</span>; a client that sends <span class="mono">high</span> gets an HTTP 500.</p>
+    <p><strong>One cache miss per conversation.</strong> The agent's second turn re-prefilled the whole conversation (35-42K tokens, about 2 minutes): the history it resent no longer matched the cached prefix, most likely because the previous reply's thinking was dropped. Every later turn reused the cache and prefilled only its new text.</p>
+  </div>
+  <p class="cap">Logs: <span class="mono">results\rw\srv_96k_9931.log</span>, <span class="mono">srv_96k_9931_b.log</span>, <span class="mono">srv_96k_9931_mtp.log</span>. One prompt with sampling, so the two drafters produced different texts of different lengths; treat the 5% as indicative.</p>
+</section>
+
+<section id="exact">
+  <div class="eyebrow">7 · Method</div>
+  <h2>Exactness and how the numbers were taken</h2>
+  <div class="col" style="display:grid;gap:10px">
+    <p><strong>Exact output.</strong> With the recommended configuration, speculative decoding (MTP or DFlash, any draft length) produces the same tokens as plain greedy decoding at 8K, 64K, 128K and 200K. Three things had to change for that: the decode-attention split partition (same for verify and decode at one position), the matmul warp count for 5-8 columns, and one matmul route (MMQ) for every batch width.</p>
+    <p><strong>Several prompts, step time first.</strong> A change that alters the matmul route changes the generated text after the first divergence, and the text's draftability then moves t/s by ±15%. Mode decisions were made over five task prompts and judged on milliseconds per step, with accepted tokens per step reported beside it.</p>
+    <p><strong>One GPU user at a time.</strong> Timed runs held a shared GPU lock, and runs that overlapped another job were discarded and repeated.</p>
+    <p><strong>Weights untouched.</strong> No smaller weight quantisation was used anywhere. Numerical shortcuts stay opt-in and gated on a KL-divergence check.</p>
+  </div>
+  <h3>Open items</h3>
+  <ul class="col" style="margin:0;padding-left:1.2em;display:grid;gap:6px">
+    <li>int8 tensor-core prefill: 2.0-2.1x the MMQ matmul in isolation, accuracy gate passed (1.06x MMQ's own error). Paused.</li>
+    <li>A fresh 200K prefill with the current DFlash + budget setup measured 22 t/s, against 205 t/s for the older MTP setup and 265 t/s for the offline two-group path. Not yet explained.</li>
+    <li>Tree drafting at 200K: estimated +3-7%, needs multi-sequence batching.</li>
+    <li>q8 KV at 128K without weight streaming: convert only the KV band the attention kernel reads to f16 (about 8 MiB instead of 538 MiB). Scoped, not built.</li>
+    <li>A 200K server prefills short prompts 15.8% slower than a short-context server. A second, short-context server avoids it.</li>
+  </ul>
+</section>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script type="application/json" id="data">
+{"_about":"Measured data for the HTML report. Source sections are report.md section numbers. ctx = prompt/content tokens. tps = decode tokens/s unless the field says pp (prefill tokens/s). Every point is MEASURED unless projected=true. 'code' = the single code prompt; 'tasks' = mean over 5 task prompts. Spec runs are greedy, 128-512 tokens.","hardware":{"gpu":"RTX 3060 12 GiB (sm_86, 28 SMs)","vram_bw_gbs":340,"vram_bw_peak_gbs":360,"fp16_tflops_peak":51.2,"fp16_tflops_effective_prefill":31,"pcie":"Gen3 x16","pcie_measured_gbs":13.3,"host_dram":"1 x DDR4-2400 (single channel), 32 GB","dram_theoretical_gbs":19.2,"os":"Windows 11 WDDM","wddm_context_gib":0.86},"models":{"IQ3_XXS":{"file":"Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf","weights_gib":9.72,"weights_no_mtp_gib":9.23},"IQ3_S":{"file":"Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf","weights_gib":11.28},"geometry":{"layers":64,"attention_layers":16,"gdn_layers":48,"kv_values_per_token_per_layer_K":1024,"kv_values_per_token_per_layer_V":1024,"params_b":27.32},"drafters":{"DFlash_Q2_K_S":{"weights_mib":535,"extra_mib":225,"block":8,"max_draft":7,"draft_ms_per_step":10.0,"draft_ms_per_step_200k":14.7},"MTP_head":{"included_in_model":true,"size_mib":721,"draft_ms_per_token":3.2}}},"kv_bytes_per_value":{"f16":2.0,"q8_0":1.0625,"q5_0":0.6875,"q4_0":0.5625},"vram_budget_mib_iq3xxs_200k_L9_mtp_off":{"weights":9227.87,"resident_kv_7_layers":1575.0,"staging_slots_2":450.0,"cuda_context":286.24,"gdn_state":149.62,"compute":85.77,"free":513.0,"_section":"3.5 (old 200K config, for the stacked-bar illustration; WDDM context of ~860 MiB is outside this total)"},"series":[{"id":"xx_q4q4_dflash_exact_code","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"DFlash d7 (d6 at 128K), all-MMQ exact","prompt":"code","section":"33","points":[{"ctx":8829,"tps":54.19,"staged":0},{"ctx":65532,"tps":38.51,"staged":0,"budget_mib":1678},{"ctx":131065,"tps":35.56,"staged":9,"budget_mib":1300},{"ctx":200369,"tps":21.06,"staged":14,"budget_mib":1000,"note":"MMVQ route, code prompt; MMQ is +4.7% on the 5-task mean"}]},{"id":"xx_q4q4_dflash_tasks","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"DFlash d7, all-MMQ","prompt":"tasks (5-prompt mean)","section":"41.1, 42","points":[{"ctx":11500,"tps":36.89},{"ctx":199600,"tps":14.21}]},{"id":"xx_q4q4_mtp_d4","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"MTP d4 (2026-10-20 build)","prompt":"code","section":"charts (results/charts/chart_data.csv)","points":[{"ctx":8188,"tps":41.06,"pp":453.7},{"ctx":32755,"tps":36.99,"pp":405.5},{"ctx":65532,"tps":36.0,"pp":347.4},{"ctx":131065,"tps":28.39,"pp":251.7},{"ctx":200369,"tps":15.68,"pp":205.4,"staged":12}]},{"id":"xx_q4q4_nospec","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"no speculation (fork flags on)","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":20.64,"pp":488.5},{"ctx":32755,"tps":19.93},{"ctx":65532,"tps":18.99},{"ctx":131065,"tps":13.36},{"ctx":200369,"tps":5.5}]},{"id":"xx_q8q4_mtp_d4","model":"IQ3_XXS","kv":"q8_0/q4_0","mode":"MTP d4","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":35.44,"pp":328.0}]},{"id":"xx_q8q4_nospec","model":"IQ3_XXS","kv":"q8_0/q4_0","mode":"no speculation","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":18.29,"pp":347.4}]},{"id":"xx_q5q4_mtp_d4","model":"IQ3_XXS","kv":"q5_0/q4_0","mode":"MTP d4 (vector kernel, no dq4 path)","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":31.96,"pp":226.0},{"ctx":32755,"tps":19.35,"pp":89.5},{"ctx":65532,"tps":12.85,"pp":49.7}]},{"id":"xx_q5q4_nospec","model":"IQ3_XXS","kv":"q5_0/q4_0","mode":"no speculation","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":19.39,"pp":236.8},{"ctx":32755,"tps":15.95},{"ctx":65532,"tps":12.76}]},{"id":"xx_prefill_resident","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"prefill, KV resident, ub 2048","section":"25.1","points":[{"ctx":2048,"pp":565.0},{"ctx":16925,"pp":537.7},{"ctx":33939,"pp":504.1},{"ctx":67966,"pp":416.6,"note":"ub 512 (ub 2048 OOMs)"},{"ctx":131072,"pp":380,"projected":true,"method":"fit T(n)=1.7562e-3 n + 6.7023e-9 n^2"},{"ctx":200000,"pp":323,"projected":true,"method":"same fit, if ub 2048 fit"}]},{"id":"xx_prefill_dflash_fresh","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"prefill with DFlash active, matched launch","section":"26.10, 50","points":[{"ctx":4096,"pp":460},{"ctx":8829,"pp":450},{"ctx":32768,"pp":406},{"ctx":65536,"pp":374,"projected":true,"method":"extrapolated in section 50"}]},{"id":"xx_prefill_one_launch_204800","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"prefill, one launch -c 204800 (KV staged)","section":"50, 46.1, 17","points":[{"ctx":4096,"pp":374},{"ctx":8829,"pp":374},{"ctx":32768,"pp":339},{"ctx":65536,"pp":294},{"ctx":200000,"pp":22,"note":"fresh full 200K prefill with staged KV (quadratic prefix copy)"},{"ctx":204365,"pp":265.17,"note":"offline two-group prefill path (section 17), then snapshot restore in 2.4 s"}]},{"id":"xx_new_turn_199k","model":"IQ3_XXS","kv":"q4_0/q4_0","mode":"new user turn on a ~199K context (DECODE_Q4)","section":"26.8","points":[{"ctx":199600,"turn_tokens":226,"prefill_s":2.3,"prefill_s_before":22.8},{"ctx":199600,"turn_tokens":1184,"prefill_s":8.9}]},{"id":"s_q4q4_dflash_stream_code","model":"IQ3_S","kv":"q4_0/q4_0","mode":"weight streaming + DFlash d7","prompt":"code (8K) / t64k-t128k restored text","section":"55.2, 55.7","points":[{"ctx":8829,"tps":49.7,"stream_mib":805,"staged":0},{"ctx":65532,"tps":25.35,"stream_mib":612,"staged":14,"budget_mib":300},{"ctx":131065,"tps":15.25,"stream_mib":863,"staged":14,"budget_mib":600}]},{"id":"s_q4q4_mtp_stream","model":"IQ3_S","kv":"q4_0/q4_0","mode":"weight streaming + MTP d4","prompt":"code","section":"55.4, 55.7","points":[{"ctx":8829,"tps":36.98,"stream_mib":612},{"ctx":65532,"tps":23.45,"pp":178,"stream_mib":612,"staged":16},{"ctx":131065,"tps":15.02,"pp":146,"stream_mib":612,"staged":16}]},{"id":"s_q4q4_tasks_8k","model":"IQ3_S","kv":"q4_0/q4_0","mode":"8K, 5-prompt mean","prompt":"tasks","section":"55.6","points":[{"ctx":12300,"tps":29.84,"label":"stream + DFlash d7 ub128"},{"ctx":12300,"tps":27.95,"label":"stream + MTP d4 ub32"},{"ctx":12300,"tps":14.58,"label":"old: 2 CPU layers + MTP d4"}]},{"id":"s_q4q4_mtp_cpu_layers_old","model":"IQ3_S","kv":"q4_0/q4_0","mode":"OLD: 3 GDN layers on CPU + output on CPU + MTP d4, all KV staged","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":19.17,"pp":316.1},{"ctx":32755,"tps":16.97,"pp":293.4},{"ctx":65532,"tps":15.05,"pp":263.7},{"ctx":131065,"tps":7.19,"pp":212.6},{"ctx":163834,"tps":6.69,"pp":199.6}]},{"id":"s_q4q4_nospec_cpu_layers_old","model":"IQ3_S","kv":"q4_0/q4_0","mode":"OLD: CPU layers, no speculation","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":11.93,"pp":335.4},{"ctx":32755,"tps":10.93},{"ctx":65532,"tps":7.92},{"ctx":131065,"tps":4.02,"pp":225.4}]},{"id":"s_q8q4_mtp_cpu_layers_old","model":"IQ3_S","kv":"q8_0/q4_0","mode":"OLD: 4 CPU layers + MTP d4","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":14.22,"pp":232.5}]},{"id":"s_q8q4_nospec_cpu_layers_old","model":"IQ3_S","kv":"q8_0/q4_0","mode":"OLD: 4 CPU layers, no speculation","prompt":"code","section":"charts","points":[{"ctx":8188,"tps":9.66,"pp":242.1}]}],"stock_baselines":[{"what":"stock code path (fork, all flags off), no speculation","ctx":8188,"tps":20.6,"section":"26.10"},{"what":"stock -ngl 48 (CPU layer offload)","ctx":98304,"tps":0.97,"section":"3.7"},{"what":"stock --no-kv-offload (host KV read mid-kernel)","ctx":49152,"tps":3.6,"section":"dev/host-kv-baseline.md"},{"what":"stock resident KV","ctx":131072,"tps":null,"note":"OOM: 128K does not load resident on IQ3_XXS-mtp","section":"dev/final-test-findings.md"}],"projections_needed":["IQ3_XXS DFlash exact at 32K and 96K (between the measured 8K/64K/128K points) and >200K up to 256K","IQ3_S at 32K, 96K, 160K-256K with streaming + DFlash (200K IQ3_S + DFlash may not fit: KV resident floor 2 layers = ~450 MiB + drafter 760 MiB)","all Q8_0/Q8_0 points (never measured)","Q8_0/Q4_0 beyond 8K (measured only at 8K)","Use the Part 5 estimator to generate projections, and label them as projected."],"calibration_targets":{"xx_dflash_code":{"8829":54.2,"65532":38.5,"131065":35.6,"200369":21.1},"xx_nospec":{"8188":20.6,"200369":5.5},"s_dflash":{"8829":49.7,"65532":25.35,"131065":15.25},"xx_prefill_resident":{"2048":565,"16925":538,"33939":504,"67966":417},"step_ms":{"xx_8k_d7":101.1,"xx_64k_d7":113.2,"xx_128k_d6":151.8,"xx_200k_d7_mmq_tasks":281.9,"xx_200k_d7_code":288.9,"xx_8k_nospec_mmvq":47.6,"xx_200k_nospec":181.5}}}
+</script>
+<script>
+"use strict";
+const DATA = JSON.parse(document.getElementById("data").textContent);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmtK = v => v === 0 ? "0" : (v / 1024 >= 1 ? Math.round(v / 1024) + "K" : v);
+
+/* ---------- estimator (same model as the fit script) ---------- */
+const KVB = { "q4_0/q4_0": 1.125, "q8_0/q4_0": 1.625, "q8_0/q8_0": 2.125, "q5_0/q4_0": 1.25 };
+const KVPAIRS = ["q4_0/q4_0", "q8_0/q4_0", "q8_0/q8_0", "q5_0/q4_0"];
+const DEF = { vram_gib: 12, reserve_gib: 1.04, vram_bw: 340, pcie_gbs: 13.3, dram_gbs: 19.2, mtp_head_gib: 0.70, weights_gib: 9.72,
+  drafter_mib: 535, draft_ms: 10, mtp_ms: 3.2, host_ms: 24, overlap: 0.9, max_stream_gib: 2.3, tflops: 31, ub: 128, exact: true,
+  pp_overlap: 0.35, k_verify: 2.28, k1_exact: 1.93, k1_fast: 1.36, att_q4: 0.21, att_q4_1: 0.10, att_q8q4: 2.0, att_q8q4_1: 0.76, att_q8q8: 2.4, att_q8q8_1: 0.9, att_q5q4: 3.6, att_q5q4_1: 0.47, attm_q8q4: 0.50, attm_q8q8: 0.55, attm_q5q4: 0.45, kvroute: "mma",
+  mode: "dflash", draft_len: 7, accept: 5.5 };
+function att(p, kv, spec) {
+  // q5/q8 pairs with LLAMA_FA_VEC_QUANT_KV unset: verify batches take the MMA kernel (f16 conversion), n=1 stays on the vector kernel
+  if (kv !== "q4_0/q4_0" && spec && p.kvroute === "mma") return kv === "q8_0/q8_0" ? p.attm_q8q8 : (kv === "q8_0/q4_0" ? p.attm_q8q4 : p.attm_q5q4);
+  if (kv === "q4_0/q4_0") return spec ? p.att_q4 : p.att_q4_1;
+  if (kv === "q8_0/q4_0") return spec ? p.att_q8q4 : p.att_q8q4_1;
+  if (kv === "q5_0/q4_0") return spec ? p.att_q5q4 : p.att_q5q4_1;
+  return spec ? p.att_q8q8 : p.att_q8q8_1;
+}
+const C2 = { "q4_0/q4_0": 6.70e-9, "q8_0/q4_0": 6.70e-9 + 1.03e-7, "q8_0/q8_0": 6.70e-9 + 1.3e-7, "q5_0/q4_0": 6.70e-9 + 2.15e-7 };
+function est(p, n, kv, mode) {
+  const nK = n / 1024;
+  // the loader skips the MTP head unless MTP drafting is on; the verify pass reads the trunk only
+  const trunk = Math.max(0, p.weights_gib - p.mtp_head_gib) * 1024;
+  const wdev = trunk + (mode === "mtp" ? p.mtp_head_gib * 1024 : 0);
+  const wread = trunk * 1.048576 / p.vram_bw;
+  const L = 1024 * KVB[kv] * n / 1048576;
+  let specExtra = 0, tdraft = 0, host = 8, accept = 1;
+  if (mode === "dflash") { specExtra = 163 + p.drafter_mib; tdraft = p.draft_ms + 0.024 * nK; host = p.host_ms; accept = p.accept; }
+  if (mode === "mtp") { specExtra = 0; tdraft = p.mtp_ms * p.draft_len; host = p.host_ms; accept = p.accept; }
+  // MMA route for q5/q8 KV converts the WHOLE K and V tensors to f16 per call and the pool keeps it (report 60.6, fattn-common.cuh:980)
+  const scratch = kv !== "q4_0/q4_0" && p.kvroute === "mma" ? 2 * 2 * 1024 * n / 1048576 : 0;
+  const cap = p.vram_gib * 1024 - wdev - p.reserve_gib * 1024 - specExtra - scratch;
+  const pcie = Math.min(p.pcie_gbs, p.dram_gbs / 1.4);
+  const cols = p.draft_len + 1;
+  let comp;
+  if (mode === "none") comp = wread * (p.exact ? p.k1_exact : p.k1_fast) + att(p, kv, false) * nK + host;
+  else comp = wread * (p.exact ? p.k_verify : (cols <= 5 ? 2.38 : 4.46)) + att(p, kv, true) * nK + tdraft + host;
+  const maxS = p.max_stream_gib * 1024;
+  const opts = [];
+  for (let r = 2; r <= 16; r++) {
+    const needKV = r === 16 ? 16 * L : (r + 2) * L;
+    let S = 0;
+    if (needKV > cap) S = needKV + 96 - cap;
+    if (S > maxS) continue;
+    const dmaMiB = (16 - r) * L + S;
+    const dma = dmaMiB * 1.048576 / pcie;
+    const ov = Math.min(p.overlap * Math.max(0, comp - tdraft - host), dma);
+    opts.push({ r, s: 16 - r, S, dma, ov, step: comp + dma - ov });
+  }
+  if (!opts.length) return { ok: false, cap, L };
+  const noStream = opts.filter(o => o.S === 0);
+  const pool = noStream.length ? noStream : opts;
+  pool.sort((a, b) => (Math.round(a.step * 10) - Math.round(b.step * 10)) || (a.dma - b.dma));
+  const o = pool[0];
+  const exposed = o.dma - o.ov;
+  let region;
+  if (o.s === 0 && o.S === 0) region = "fits";
+  else if (exposed <= 1e-6) region = o.s === 0 ? "wstream" : "hidden";
+  else region = "cliff";
+  const effUb = (1 / (1 + 19.5 / p.ub)) / (1 / (1 + 19.5 / 2048));
+  const c2 = kv !== "q4_0/q4_0" && p.kvroute === "mma" ? C2["q4_0/q4_0"] : C2[kv];   // report 60.1-60.2: MMA prefill is q4-speed
+  let tpp = (1.7562e-3 * (31 / p.tflops) * n + c2 * (31 / p.tflops) * n * n) / effUb;
+  if (mode === "dflash") tpp *= 1.074; else if (mode === "mtp") tpp *= 1.086;
+  const tdmaPP = (n / p.ub) * o.S * 1.048576 / pcie / 1000 + o.s * 1024 * KVB[kv] * n * n / (2 * p.ub) / (pcie * 1e9);
+  tpp = tpp + tdmaPP - p.pp_overlap * Math.min(tpp, tdmaPP);
+  return { ok: true, ...o, comp, exposed, region, tps: accept / o.step * 1000, pp: n / tpp, cap, L, pcie };
+}
+const REGION = {
+  fits: { label: "Fits in VRAM + drafting", v: "--band-fits" },
+  wstream: { label: "Weights streamed, copies hidden", v: "--band-wstream" },
+  hidden: { label: "PCIe stream, still hidden", v: "--band-hidden" },
+  cliff: { label: "PCIe cliff, partly held up by drafting", v: "--band-cliff" },
+  oom: { label: "Does not fit", v: "--band-drop" }
+};
+function bandsFor(p, kv, mode, maxN) {
+  const out = []; let cur = null;
+  for (let n = 1024; n <= maxN; n += 1024) {
+    const e = est(p, n, kv, mode); const reg = e.ok ? e.region : "oom";
+    if (!cur || cur.reg !== reg) { if (cur) cur.to = n - 1024; cur = { reg, from: cur ? n - 1024 : 0, to: n }; out.push(cur); }
+    else cur.to = n;
+  }
+  return out;
+}
+
+/* ---------- headline tiles, VRAM bars, KV table ---------- */
+const tiles = [
+  ["8K decode, IQ3_XXS", "54.2", "t/s", "stock b11717 at best settings: 43.2 t/s on the same prompt (fork 54.9, 1.27x). DFlash d7, exact."],
+  ["128K decode, IQ3_XXS", "35.6", "t/s", "stock at best settings: 4.7 t/s (32 FFN layers on the CPU). Same prompt: fork 30.2, 6.4x."],
+  ["200K decode, IQ3_XXS", "21.1", "t/s", "code prompt; 14.2 over five task prompts. Stock: 2.7 t/s; same prompt fork 18.8, 6.9x."],
+  ["8K decode, IQ3_S", "49.7", "t/s", "from 19.8 t/s with CPU layers; 29.8 vs 14.6 over five task prompts."],
+  ["Real agent session, IQ3_XXS", "26.1", "t/s", "pi coding agent, xhigh thinking, sampling: 34,935 tokens over 7K-42K context, 3.0 tokens per step."]
+];
+document.getElementById("tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="k">${t[0]}</div><div class="v num">${t[1]} <small>${t[2]}</small></div><div class="d">${t[3]}</div></div>`).join("");
+
+function vramBars() {
+  const card = 12288, reserve = 1065, weights = 9228, spec = 698, maxw = 12288 + 3100;
+  const rows = [
+    { lab: "8K", kv: 144, slots: 0, host: 0 },
+    { lab: "64K", kv: 1152, slots: 0, host: 0 },
+    { lab: "200K", kv: 675, slots: 450, host: 2925 }
+  ];
+  const segs = [["Driver + runtime reserve", "--seg-reserve"], ["Weights on GPU", "--seg-weights"], ["Drafter + rollback state", "--seg-spec"], ["Resident KV", "--seg-kv"], ["Staging slots", "--seg-slots"], ["Free", "--seg-free"], ["KV in host RAM (crosses PCIe)", "--seg-host"]];
+  const html = rows.map(r => {
+    const free = card - reserve - weights - spec - r.kv - r.slots;
+    const vals = [reserve, weights, spec, r.kv, r.slots, free];
+    const parts = vals.map((v, i) => v > 0 ? `<div class="seg" title="${segs[i][0]}: ${v.toLocaleString()} MiB" style="width:${v / maxw * 100}%;background:var(${segs[i][1]})"></div>` : "").join("");
+    const host = r.host ? `<div class="seg host" title="KV in host RAM: ${r.host.toLocaleString()} MiB" style="width:${r.host / maxw * 100}%"></div>` : "";
+    return `<div class="barrow"><div class="lab">${r.lab}</div><div class="bar">${parts}${host}<div class="cardedge" style="left:${card / maxw * 100}%"></div></div></div>`;
+  }).join("");
+  document.getElementById("vrambars").innerHTML = html;
+  document.getElementById("vramlegend").innerHTML = segs.map(s => `<span><i style="background:${s[1] === "--seg-host" ? "repeating-linear-gradient(135deg,var(--seg-host) 0 3px,transparent 3px 6px)" : "var(" + s[1] + ")"};${s[1] === "--seg-free" ? "outline:1px solid var(--axis)" : ""}"></i>${s[0]}</span>`).join("");
+}
+vramBars();
+document.getElementById("kvtable").innerHTML = [8192, 65536, 131072, 204800].map(n => {
+  const L = 1152 * n / 1048576;
+  return `<tr><td>${fmtK(n)}</td><td class="n">${L.toFixed(0)} MiB</td><td class="n">${(16 * L).toLocaleString(undefined, { maximumFractionDigits: 0 })} MiB</td><td class="n">${(L * 1.048576 / 13.3).toFixed(1)} ms</td></tr>`;
+}).join("");
+
+/* ---------- changes table ---------- */
+const CATS = { "PCIe / long context": "--s1", "VRAM": "--s3", "Decode kernel": "--s2", "Exactness": "--s7", "Speculative decoding": "--s5", "Prefill": "--s4", "Tooling": "--muted" };
+const CHANGES = [
+  ["PCIe / long context", "Staged host KV: <code>LLAMA_KV_STAGED_LAYERS</code>, <code>LLAMA_KV_STAGE_SLOTS</code> (2)", "KV of chosen layers lives in pinned host RAM; 2 device slots and 2 copy streams; only the changed prefix is copied", "96K: 0.97 t/s (stock -ngl 48) to 11.31 t/s, 11.7x; makes 128K-200K possible at all", "above ~64K", "2, 3"],
+  ["PCIe / long context", "KV GPU budget: <code>LLAMA_KV_GPU_BUDGET_MIB</code>", "stages only as many KV layers as needed to fit the budget; at least 2 layers always stay resident", "one setting works from 4K to 200K (128K: 1300 MiB, 200K: 1000 MiB)", "all long context", "27, 33, 55.7"],
+  ["PCIe / long context", "KV snapshots at any staging depth (<code>--slot-save-path</code>), offline two-group prefill", "save and restore a 200K context in seconds; build a 200K cache offline", "200K prefill 265 t/s offline; restore 2.4-5 s instead of a 15-minute prefill", "long documents reused", "8, 17"],
+  ["VRAM", "Flash-attention f16 K/V scratch moved to the memory pool (always on in the fork)", "the f16 copy only the prefill kernel needs no longer sits permanently in the compute buffer", "target compute buffer 433 to 61 MiB, draft 428 to 2.8 MiB (~800 MiB freed at 96K)", "every context", "7.1"],
+  ["VRAM", "<code>LLAMA_FA_VEC_QUANT_KV=1</code> with <code>LLAMA_FA_VEC_MAX_NQ</code>", "decode-sized batches use the vector kernel on quantized KV (no full-context f16 copy, 838 MiB at 200K); prefill keeps the MMA kernel", "enabled 9-12 staged layers at 200K (+49% decode then); the batch-size gate gave +37% prefill at 2K", "200K decode; all prefill", "7.2, 19"],
+  ["VRAM", "<code>LLAMA_RS_REPLAY=1</code>", "speculative rollback of the recurrent state by replaying steps instead of keeping one state copy per draft token", "rollback buffer 598 to 313 MiB, flat in draft length (1-2 more resident KV layers)", "speculative decoding, long context", "26.4"],
+  ["VRAM", "<code>LLAMA_MTP_WINDOW=8192</code>", "the MTP head's KV becomes an 8K sliding window; the target's verify keeps output lossless", "MTP cache stops growing with context; acceptance unchanged", "MTP at long context", "26.4"],
+  ["VRAM", "<code>--spec-draft-n-ubatch 16</code> (stock flag, tuned)", "smaller draft compute buffer", "MTP fits with one fewer staged layer", "speculation at 200K", "26.4"],
+  ["VRAM", "Output head placement (<code>-ot output.weight=CPU</code> or <code>CUDA0</code>)", "the 644 MiB head on the CPU costs ~0.9 ms per token; on the GPU it is faster when VRAM allows", "freed 644 MiB in the MTP-era 200K setup; on the GPU it is +22% at 8K for IQ3_S", "tight VRAM", "14.3, 31"],
+  ["VRAM", "Weight streaming: <code>LLAMA_W_STAGE_ENABLE</code>, <code>_BLOCKS</code>, <code>_SLOT_MIB</code>, <code>_PREFETCH</code>", "single big weight tensors (ffn_down), spread every 3-4 layers, stream through 2 x 48 MiB slots from the pinned model file, prefetched inside the CUDA graph", "IQ3_S with no CPU layers: 8K 19.76 to 49.70 t/s (code prompt; 14.58 to 29.84 over five prompts), 64K 13.15 to 25.35, 128K 10.07 to 15.25; the real-server 64K profile needs 797 MiB streamed and -ub 32 (23.65 t/s)", "models larger than VRAM", "55, 58.1"],
+  ["VRAM", "Pinned model file mapping (<code>cudaHostRegisterReadOnly</code>)", "pins the mapped GGUF in place so it can be copied at full PCIe rate", "13.3 GB/s instead of 6.6 GB/s pageable; no host mirror copy", "weight streaming", "52"],
+  ["Decode kernel", "<code>LLAMA_FA_DECODE_Q4=1</code>", "new split-K, GQA-packed q4_0 decode attention (CUDA port of the AMD paged-decode design); each KV row is read once for all 6 query heads and all verify tokens, on tensor cores", "per layer at 200K: 4.98 to 0.95 ms (1 token), 24.1 to 1.53 ms (4 tokens); a new 226-token turn at ~199K prefills in 2.3 s instead of 22.8 s", "long-context decode and verify; new turns", "26.2, 26.8"],
+  ["Decode kernel", "<code>GGML_CUDA_PREFER_MMQ=1</code> (skips the fused mul_mat_vec_q paths)", "every small-batch matmul uses MMQ's 8-column tile instead of the vector kernel", "8K +53% (five prompts), 128K +21%, 200K +4.7% (five prompts); also the exact mode", "every context with speculation", "29, 32, 33, 41, 42"],
+  ["Decode kernel", "q8 KV: leave <code>LLAMA_FA_VEC_QUANT_KV</code> unset (<code>serve_prod.ps1 -Ctk q8_0</code> does it)", "q8 verify and prefill batches take the MMA kernel instead of the vector kernel, which is fast only for q4_0", "q8_0/q4_0 at 8K: 48.1 to 56.8 t/s decode, 325 to 461 t/s prefill; against q4_0/q4_0 at the same setup -11% at 64K, -32% at 128K", "q8 KV for quality", "60"],
+  ["Exactness", "<code>LLAMA_MMVQ_BATCH_INVARIANT=1</code>", "5-8 column batches use the 4-column warp count, so the sum order doesn't depend on batch width", "spec output == greedy output at draft length 4 and up; costs at most 0.6% at 200K", "speculative decoding", "26.7"],
+  ["Exactness", "Split partition taken from the whole cache tensor (inside DECODE_Q4)", "verify and decode at the same position use the same attention split", "spec output == greedy output at 200K", "speculative decoding", "26.7"],
+  ["Exactness", "<code>LLAMA_FA_Q4_SPLIT_TOKENS=N</code>", "the attention split is fixed in tokens, so output no longer depends on <code>-c</code>", "a <code>-c 204800</code> server answering an 8K chat: -30% to -8% against a matched launch, identical tokens; through llama-server at 2048, 4K chats decode 36.54 t/s against 36.28 on a <code>-c 32768</code> server", "one server for every context size", "46, 58.2b"],
+  ["Speculative decoding", "MTP drafting (<code>--spec-type draft-mtp</code>, stock) made worthwhile at long context", "through DECODE_Q4, RS_REPLAY and MTP_WINDOW", "200K: MTP d4 15.55 t/s against 5.50 without speculation (before: a net loss, 3.63 vs 3.79)", "32K-200K", "3.3, 26.5, 28"],
+  ["Speculative decoding", "DFlash block drafter (<code>--spec-type draft-dflash</code>, 535 MiB Q2_K_S, draft length 6-7)", "drafts an 8-token block in one ~10-15 ms call from the target's hidden features; windowed cache, flat VRAM", "8K 54.19 t/s, 128K 35.56, 200K 21.06 (+35% over MTP); the verify fits in the PCIe idle time", "everywhere; most at 200K", "26.10, 28, 33"],
+  ["Speculative decoding", "DFlash on IQ3_S at 64K/128K through the KV budget", "the drafter's sliding-window cache stays resident (the fixed-layer staging mode refused it)", "64K 25.35 t/s (+10.6% over MTP), 128K 15.25 (+3.1%)", "IQ3_S long context", "55.7"],
+  ["Prefill", "Vector-kernel gate (<code>LLAMA_FA_VEC_MAX_NQ</code>) and ubatch tuning", "prefill takes the MMA kernel, decode takes the vector or q4 decode kernel", "2K prefill 411 to 566 t/s (+37%)", "all prefill", "19, 25"],
+  ["Tooling", "<code>GGML_MM_ROUTE</code>, <code>GGML_MM_TIMING</code>, <code>GGML_FA_TIMING</code>, <code>LLAMA_STEP_TIMING</code>, <code>GGML_KV_STAGE_PROF</code>", "opt-in logs of the matmul route, kernel times and step phases", "diagnostics only", "measurement", "27, 29"]
+];
+const REJECTED = [
+  ["CPU-assisted attention", "rejected", "the CPU turns only ~20 GB/s of host memory into attention (§13)"],
+  ["Drafter on the CPU at 200K", "21.33 to 10.37 t/s", "the drafter is 31x slower per call (§43)"],
+  ["One staging slot to fit one more layer", "-0.98 t/s", "the copy can no longer hide behind compute (§3.1.1)"],
+  ["Unpack weights once per verify batch (MMVQ)", "0%, bit-exact", "not where the time goes (§26.9)"],
+  ["Custom small-batch IQ3 matmul kernels (v1-v9, incl. an in-place repacked layout)", "v9: 17-20% faster than MMQ alone, 1.7% slower per step in the model", "the isolated win did not carry into the model; shelved (§34, §57)"],
+  ["Pre-dequantized weights for prefill", "at most 1.2x", "prefill is compute-bound, not unpack-bound (§20)"],
+  ["MMQ occupancy tuning", "no gain", "(§21)"],
+  ["Q4_K_M drafter instead of Q2_K_S", "identical tokens, +550 MiB", "drafter precision is not what limits acceptance (§40)"],
+  ["Keeping the fused GLU kernel for streamed weights", "at most +3.4% at 8K, ~0 at 64K/128K", "long context is PCIe-bound (§55.7)"],
+  ["q8_0 split-K decode kernel (dq8)", "not built (estimate: 1-2 days)", "q8 K is 1.44x the bytes over PCIe at depth, and the MMA route already removes the vector-kernel penalty (§60.5)"],
+  ["q5_0 K decode kernel", "not built", "q4_0/q4_0 is good enough for production; q5_0/q4_0 is kept in the estimator only"],
+  ["Smaller weight quantisation", "ruled out", "quality is the red line"]
+];
+let catOn = new Set(Object.keys(CATS));
+function renderChanges() {
+  document.getElementById("catchips").innerHTML = Object.keys(CATS).map(c => `<button type="button" class="chip" data-cat="${c}" aria-pressed="${catOn.has(c)}">${c}</button>`).join("");
+  document.getElementById("changetable").innerHTML = CHANGES.filter(r => catOn.has(r[0])).map(r => `<tr><td><span class="cat" style="--c:var(${CATS[r[0]]})">${r[0]}</span></td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td><td class="mono">${r[5]}</td></tr>`).join("");
+}
+document.getElementById("catchips").addEventListener("click", e => {
+  const b = e.target.closest("[data-cat]"); if (!b) return;
+  const c = b.dataset.cat;
+  if (catOn.size === Object.keys(CATS).length) catOn = new Set([c]);
+  else if (catOn.has(c)) { catOn.delete(c); if (!catOn.size) catOn = new Set(Object.keys(CATS)); }
+  else catOn.add(c);
+  renderChanges();
+});
+renderChanges();
+document.getElementById("rejecttable").innerHTML = REJECTED.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join("");
+
+/* ---------- chart helpers ---------- */
+const charts = {};
+const bandPlugin = {
+  id: "bands",
+  beforeDatasetsDraw(chart, args, opts) {
+    const bands = opts.bands || []; if (!bands.length) return;
+    const { ctx, chartArea: a } = chart; const swap = opts.swap;
+    const sc = swap ? chart.scales.x : chart.scales.y;
+    ctx.save();
+    bands.forEach(b => {
+      const p1 = sc.getPixelForValue(b.from), p2 = sc.getPixelForValue(Math.min(b.to, sc.max));
+      ctx.fillStyle = css(REGION[b.reg].v);
+      if (swap) ctx.fillRect(Math.min(p1, p2), a.top, Math.abs(p2 - p1), a.bottom - a.top);
+      else ctx.fillRect(a.left, Math.min(p1, p2), a.right - a.left, Math.abs(p2 - p1));
+      const span = Math.abs(p2 - p1);
+      if (span > 16) {
+        ctx.fillStyle = css("--ink-2"); ctx.font = `11px ${css("--mono").split(",")[0]}`;
+        if (swap) { ctx.save(); ctx.translate(Math.min(p1, p2) + 12, a.top + 6); ctx.rotate(Math.PI / 2); ctx.fillText(REGION[b.reg].label, 0, 0); ctx.restore(); }
+        else ctx.fillText(REGION[b.reg].label, a.right - ctx.measureText(REGION[b.reg].label).width - 6, Math.max(p1, p2) - 6);
+      }
+    });
+    ctx.restore();
+  }
+};
+Chart.register(bandPlugin);
+function baseOptions(valueLabel, swap, bands, maxV) {
+  const ink = css("--ink-2"), grid = css("--rule"), muted = css("--muted");
+  const ctxAxis = { type: "linear", min: 0, max: 262144, ticks: { stepSize: 32768, callback: v => fmtK(v), color: muted, font: { family: "IBM Plex Mono", size: 11 } }, grid: { color: grid }, border: { color: css("--axis") }, title: { display: true, text: "context (tokens)", color: ink } };
+  const valAxis = { type: "linear", min: 0, suggestedMax: maxV, ticks: { color: muted, font: { family: "IBM Plex Mono", size: 11 } }, grid: { color: grid }, border: { color: css("--axis") }, title: { display: true, text: valueLabel, color: ink } };
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: "nearest", intersect: false },
+    scales: swap ? { x: ctxAxis, y: valAxis } : { x: valAxis, y: ctxAxis },
+    plugins: {
+      bands: { bands, swap },
+      legend: { position: "bottom", labels: { color: ink, usePointStyle: true, boxWidth: 8, font: { size: 11 }, filter: item => !/: (out of memory|region change)$/.test(item.text) } },
+      tooltip: { callbacks: {
+        title: items => items.length ? items[0].dataset.label : "",
+        label: it => { const r = it.raw; return `${fmtK(r.ctx)} tokens (${r.ctx.toLocaleString()}): ${r.v.toFixed(r.v < 10 ? 2 : 1)} t/s${r.proj ? " · projected" : ""}${r.note ? " · " + r.note : ""}`; }
+      } }
+    }
+  };
+}
+function mkDataset(label, color, pts, swap, opt = {}) {
+  const data = pts.map(p => ({ x: swap ? p.ctx : p.v, y: swap ? p.v : p.ctx, ...p }));
+  return {
+    label, data, showLine: opt.line !== false, borderColor: color, backgroundColor: color, borderWidth: 2,
+    pointRadius: opt.r ?? 4.5, pointHoverRadius: 7, pointStyle: opt.style || "circle",
+    pointBackgroundColor: data.map(d => d.proj ? css("--surface") : color), pointBorderColor: color, pointBorderWidth: 2,
+    borderDash: opt.dash || undefined,
+    segment: { borderDash: s => (opt.dash || (s.p1 && s.p1.raw && s.p1.raw.proj)) ? (opt.dash || [5, 4]) : undefined },
+    order: opt.order ?? 1
+  };
+}
+function draw(id, type, datasets, opts) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), { type, data: { datasets }, options: opts });
+}
+const S = id => DATA.series.find(s => s.id === id);
+const pts = (id, key, filter) => (S(id) ? S(id).points : []).filter(p => p[key] != null && (!filter || filter(p))).map(p => ({ ctx: p.ctx, v: p[key], proj: !!p.projected, note: p.note || p.method || p.label || "" })).sort((a, b) => a.ctx - b.ctx);
+
+/* ---------- section 4: measured charts ---------- */
+let m1model = "IQ3_XXS";
+function estCurve(p, kv, mode, key) {
+  const out = [];
+  for (let n = 4096; n <= 262144; n += 4096) { const e = est(p, n, kv, mode); if (!e.ok) break; out.push({ ctx: n, v: key === "pp" ? e.pp : e.tps, proj: true, note: "estimate, default parameters" }); }
+  return out;
+}
+function renderMeasured() {
+  const swap = !document.getElementById("m1swap").checked, showEst = document.getElementById("m1est").checked;
+  const p = { ...DEF, weights_gib: m1model === "IQ3_S" ? 11.28 : 9.72, ub: m1model === "IQ3_S" ? 32 : 128 };
+  const bands = bandsFor(p, m1band, "dflash", 262144);
+  const c = i => css("--s" + i), est_c = css("--est");
+  let dd = [], pp = [], rows = [];
+  const add = (arr, label, color, points, opt) => { if (points.length) { arr.push(mkDataset(label, color, points, swap, opt)); points.forEach(q => rows.push([label, q])); } };
+  if (m1model === "IQ3_XXS") {
+    add(dd, "DFlash d7, exact, code prompt", c(1), pts("xx_q4q4_dflash_exact_code", "tps"));
+    add(dd, "DFlash d7, five task prompts", c(1), pts("xx_q4q4_dflash_tasks", "tps"), { line: false, style: "triangle", r: 6 });
+    add(dd, "DFlash d7, real agent session (xhigh thinking, sampling)", c(1), [{ ctx: 24199, v: 26.13, note: "one 34,935-token reply while context grew 6.7K to 41.7K; 3.03 tokens/step" }, { ctx: 62600, v: 23.26, note: "13 agent turns at 56K-69K context; 124-130 ms/step" }], { line: false, style: "star", r: 9 });
+    add(dd, "MTP d4 (Oct 20 build)", c(2), pts("xx_q4q4_mtp_d4", "tps"));
+    add(dd, "no speculation", c(3), pts("xx_q4q4_nospec", "tps"));
+    add(dd, "q8_0/q4_0 KV, MTP d4", c(4), pts("xx_q8q4_mtp_d4", "tps"), { style: "rectRot", r: 6 });
+    add(dd, "q8_0/q4_0 KV, no speculation", c(5), pts("xx_q8q4_nospec", "tps"), { style: "rectRot", r: 6 });
+    add(dd, "q5_0/q4_0 KV, MTP d4", c(6), pts("xx_q5q4_mtp_d4", "tps"));
+    add(dd, "q5_0/q4_0 KV, no speculation", c(7), pts("xx_q5q4_nospec", "tps"));
+    add(dd, "stock b11717, best settings (DFlash d7, FFN on CPU as needed)", c(8), [{ ctx: 8829, v: 43.16, note: "all on GPU" }, { ctx: 65532, v: 10.35, note: "12 FFN layers on CPU" }, { ctx: 131065, v: 4.70, note: "32 FFN layers on CPU" }, { ctx: 200369, v: 2.74, note: "44 FFN layers on CPU" }], { style: "crossRot", r: 7 });
+    add(pp, "resident KV, ub 2048 (no speculation)", c(1), pts("xx_prefill_resident", "pp"));
+    add(pp, "DFlash active, launch sized to the prompt", c(2), pts("xx_prefill_dflash_fresh", "pp"));
+    add(pp, "one launch at -c 204800 (KV staged)", c(3), pts("xx_prefill_one_launch_204800", "pp", q => q.ctx !== 204365));
+    add(pp, "offline two-group prefill", c(7), pts("xx_prefill_one_launch_204800", "pp", q => q.ctx === 204365), { line: false, style: "star", r: 8 });
+    add(pp, "MTP d4 (Oct 20 build, ub 128)", c(4), pts("xx_q4q4_mtp_d4", "pp"));
+    add(pp, "q8_0/q4_0 KV, MTP d4", c(5), pts("xx_q8q4_mtp_d4", "pp"), { style: "rectRot", r: 6 });
+    add(pp, "q5_0/q4_0 KV, MTP d4", c(6), pts("xx_q5q4_mtp_d4", "pp"));
+    add(pp, "stock b11717, best settings", c(8), [{ ctx: 8829, v: 460.9, note: "all on GPU" }, { ctx: 65532, v: 238.5, note: "12 FFN layers on CPU" }, { ctx: 131065, v: 148.3, note: "32 FFN layers on CPU" }, { ctx: 200369, v: 111.2, note: "44 FFN layers on CPU" }], { style: "crossRot", r: 7 });
+  } else {
+    add(dd, "weights streamed + DFlash d7", c(1), pts("s_q4q4_dflash_stream_code", "tps"));
+    add(dd, "weights streamed + DFlash d7, five task prompts", c(1), pts("s_q4q4_tasks_8k", "tps", q => /DFlash/.test(q.label || "")), { line: false, style: "triangle", r: 6 });
+    add(dd, "weights streamed + MTP d4", c(2), pts("s_q4q4_mtp_stream", "tps"));
+    add(dd, "weights streamed + MTP d4, five task prompts", c(2), pts("s_q4q4_tasks_8k", "tps", q => /MTP d4 ub32/.test(q.label || "") && /stream/.test(q.label || "")), { line: false, style: "triangle", r: 6 });
+    add(dd, "old: GDN layers on CPU + MTP d4", c(3), pts("s_q4q4_mtp_cpu_layers_old", "tps"));
+    add(dd, "old: CPU layers, five task prompts", c(3), pts("s_q4q4_tasks_8k", "tps", q => /old/.test(q.label || "")), { line: false, style: "triangle", r: 6 });
+    add(dd, "old: CPU layers, no speculation", c(4), pts("s_q4q4_nospec_cpu_layers_old", "tps"));
+    add(dd, "old: q8_0/q4_0 KV, MTP d4", c(5), pts("s_q8q4_mtp_cpu_layers_old", "tps"), { style: "rectRot", r: 6 });
+    add(dd, "old: q8_0/q4_0 KV, no speculation", c(6), pts("s_q8q4_nospec_cpu_layers_old", "tps"), { style: "rectRot", r: 6 });
+    add(pp, "weights streamed + MTP d4 (ub 32)", c(2), pts("s_q4q4_mtp_stream", "pp"));
+    add(pp, "old: CPU layers + MTP d4", c(3), pts("s_q4q4_mtp_cpu_layers_old", "pp"));
+    add(pp, "old: CPU layers, no speculation", c(4), pts("s_q4q4_nospec_cpu_layers_old", "pp"));
+    add(pp, "old: q8_0/q4_0 KV, MTP d4", c(5), pts("s_q8q4_mtp_cpu_layers_old", "pp"), { style: "rectRot", r: 6 });
+  }
+  if (showEst) {
+    dd.push(mkDataset("estimate: DFlash d7, q4_0/q4_0, code acceptance", est_c, estCurve(p, "q4_0/q4_0", "dflash", "tps"), swap, { dash: [6, 4], r: 0, order: 5 }));
+    pp.push(mkDataset("estimate: DFlash, q4_0/q4_0", est_c, estCurve(p, "q4_0/q4_0", "dflash", "pp"), swap, { dash: [6, 4], r: 0, order: 5 }));
+  }
+  draw("m1d", "scatter", dd, baseOptions("decode tokens/s", swap, bands, 60));
+  draw("m1p", "scatter", pp, baseOptions("prefill tokens/s", swap, bands, 600));
+  document.getElementById("m1table").innerHTML = rows.map(([l, q]) => `<tr><td>${l}</td><td class="n">${q.ctx.toLocaleString()}</td><td class="n">${dd.some(d => d.label === l) ? q.v.toFixed(2) : ""}</td><td class="n">${pp.some(d => d.label === l) ? q.v.toFixed(1) : ""}</td><td>${q.proj ? "projected: " : ""}${q.note}</td></tr>`).join("");
+  document.getElementById("m1note").innerHTML = m1model === "IQ3_XXS"
+    ? "Background bands come from the estimator at default settings (IQ3_XXS, DFlash, " + m1band + " KV, picked above) and are approximate." + (m1band !== "q4_0/q4_0" ? " The measured q8 points ran MTP, not DFlash, so they sit outside these bands' assumptions." : "") + " Decode depends on how draftable the text is: the lines use one greedy code prompt with thinking off, the triangles are the mean over five task prompts (8K 36.9, 200K 14.2 t/s), and the stars are a real coding-agent session with xhigh thinking and sampling (26.1 and 23.3 t/s), plotted at the middle of the context range each covered. The q8 and q5 KV points here ran MTP on the old vector-kernel route; with that route switched off, q8_0/q4_0 runs at 56.8 t/s at 8K (section 4c). Crosses are the official b11717 binary at its best settings on the same prompts (section 4b). Hollow points and dashed segments are projected."
+    : "Background bands come from the estimator at default settings (IQ3_S, DFlash, " + m1band + " KV, picked above) and are approximate. The 64K and 128K DFlash points ran on restored contexts; the 8K line point uses the code prompt, and the triangles are five-task-prompt means. Through a real server the 64K profile needed 797 MiB streamed and -ub 32 (the snapshot-only set ran out of memory on the first real prefill) and decodes 23.65 t/s at 64K (section 6). IQ3_S at 200K was not measured. 'Old' rows ran 2-4 GDN layers on the CPU with the output head on the CPU.";
+}
+document.getElementById("m1model").innerHTML = ["IQ3_XXS", "IQ3_S"].map(m => `<button type="button" class="chip" data-m="${m}" aria-pressed="${m === m1model}">${m}${m === "IQ3_XXS" ? " · 9.72 GiB" : " · 11.28 GiB"}</button>`).join("");
+document.getElementById("m1model").addEventListener("click", e => { const b = e.target.closest("[data-m]"); if (!b) return; m1model = b.dataset.m; document.querySelectorAll("#m1model .chip").forEach(x => x.setAttribute("aria-pressed", x.dataset.m === m1model)); renderMeasured(); });
+["m1swap", "m1est"].forEach(id => document.getElementById(id).addEventListener("change", renderMeasured));
+
+/* ---------- section 5: estimator ---------- */
+const DRAFTERS = [{ name: "DFlash2 Q2_K_S (535 MiB)", mib: 535, ms: 10, src: "measured, §26.10/§35" }, { name: "DFlash2 Q4_K_M (1,087 MiB)", mib: 1087, ms: 10.25, src: "measured, §40" }];
+const PCIE = [["Gen3 x8", 6.65], ["Gen3 x16 (this machine, measured)", 13.3], ["Gen4 x8", 13.3], ["Gen4 x16", 26.6], ["Gen5 x8", 26.6], ["Gen5 x16", 53.2]];
+const DRAM = [["DDR4-2400, 1 channel (this machine)", 19.2], ["DDR4-3200, 2 channels", 51.2], ["DDR5-5600, 2 channels", 89.6]];
+const MODELS = [["IQ3_XXS-mtp (9.72 GiB)", 9.72], ["IQ3_S-mtp (11.28 GiB)", 11.28]];
+const FIELDS = [
+  { id: "model", label: "Model", type: "select", opts: MODELS.map(m => [m[0], m[1]]).concat([["custom", "custom"]]), def: 9.72, hint: "sets weight size" },
+  { id: "weights_gib", label: "Model weights (GiB)", type: "number", step: 0.01, def: 9.72, hint: "whole GGUF, MTP head included" },
+  { id: "mtp_head_gib", label: "MTP head size (GiB)", type: "number", step: 0.01, def: 0.70, hint: "part of the model file; loaded only in MTP mode (DFlash and no-spec skip it)" },
+  { id: "vram_preset", label: "VRAM preset", type: "select", opts: [["8 GiB", 8], ["10 GiB", 10], ["12 GiB (RTX 3060)", 12], ["16 GiB", 16], ["24 GiB", 24], ["custom", "custom"]], def: 12 },
+  { id: "vram_gib", label: "VRAM (GiB)", type: "number", step: 0.5, def: 12 },
+  { id: "reserve_gib", label: "Driver + runtime reserve (GiB)", type: "number", step: 0.01, def: 1.04, hint: "fitted on Windows: display-driver context, recurrent state, compute buffers; lower on Linux" },
+  { id: "vram_bw", label: "VRAM bandwidth (GB/s)", type: "number", step: 10, def: 340, hint: "3060 12 GB: 340 measured, 360 peak" },
+  { id: "tflops", label: "GPU fp16 tensor TFLOPS, effective", type: "number", step: 1, def: 31, hint: "3060: 51.2 peak, 31 reached in prefill" },
+  { id: "pcie_preset", label: "PCIe link", type: "select", opts: PCIE.map(p => [p[0], p[1]]).concat([["custom", "custom"]]), def: 13.3 },
+  { id: "pcie_gbs", label: "PCIe host-to-device (GB/s, effective)", type: "number", step: 0.1, def: 13.3, hint: "presets use 84.5% of the theoretical rate, as measured on Gen3 x16" },
+  { id: "dram_preset", label: "Host RAM", type: "select", opts: DRAM.map(p => [p[0], p[1]]).concat([["custom", "custom"]]), def: 19.2 },
+  { id: "dram_gbs", label: "Host DRAM bandwidth (GB/s)", type: "number", step: 0.1, def: 19.2, hint: "caps the link at DRAM / 1.4" },
+  { id: "mode", label: "Speculative decoding", type: "select", opts: [["DFlash", "dflash"], ["MTP", "mtp"], ["none", "none"]], def: "dflash" },
+  { id: "drafter", label: "DFlash drafter", type: "select", opts: [], def: 0 },
+  { id: "mtp_ms", label: "MTP draft time per token (ms)", type: "number", step: 0.1, def: 3.2 },
+  { id: "draft_len", label: "Draft length", type: "number", step: 1, def: 7, hint: "DFlash max 7; MTP best 4" },
+  { id: "accept_preset", label: "Acceptance preset", type: "select", opts: [["code, greedy, no thinking (DFlash d7 5.5 / MTP d4 4.27)", "code"], ["typical tasks (DFlash d7 3.9 / MTP d4 3.3)", "tasks"], ["agent session, xhigh thinking + sampling (DFlash d7 3.0 / MTP d4 2.9)", "agent"], ["custom", "custom"]], def: "code" },
+  { id: "accept", label: "Accepted tokens per step", type: "number", step: 0.05, def: 5.5 },
+  { id: "exact", label: "Exact mode (spec == greedy output)", type: "select", opts: [["on (MMQ route)", "1"], ["off (vector-kernel route)", "0"]], def: "1" },
+  { id: "max_stream_gib", label: "Most weight that may stream (GiB)", type: "number", step: 0.1, def: 2.3, hint: "all ffn_down tensors" },
+  { id: "kvroute", label: "Attention route for q5/q8 KV", type: "select", opts: [["MMA kernel (LLAMA_FA_VEC_QUANT_KV unset, recommended)", "mma"], ["vector kernel (VEC_QUANT_KV set, old)", "vec"]], def: "mma", hint: "q4_0/q4_0 always uses its split-K decode kernel" },
+  { id: "ub", label: "Prefill ubatch", type: "select", opts: [["32", 32], ["128", 128], ["512", 512], ["2048", 2048]], def: 128 }
+];
+const FIELDS2 = [
+  ["k_verify", "verify weight factor (x read floor)", 0.05], ["k1_exact", "1-token factor, exact", 0.05], ["k1_fast", "1-token factor, vector route", 0.05],
+  ["att_q4", "attention ms per 1K tokens, q4/q4 verify", 0.01], ["att_q4_1", "same, 1 token", 0.01], ["att_q8q4", "q8/q4 verify", 0.1], ["att_q8q4_1", "q8/q4, 1 token", 0.01],
+  ["att_q8q8", "q8/q8 verify (assumed)", 0.1], ["att_q8q8_1", "q8/q8, 1 token (assumed)", 0.01], ["att_q5q4", "q5/q4 verify", 0.1], ["att_q5q4_1", "q5/q4, 1 token", 0.01], ["attm_q8q4", "q8/q4 verify, MMA route", 0.01], ["attm_q8q8", "q8/q8 verify, MMA route (assumed)", 0.01], ["attm_q5q4", "q5/q4 verify, MMA route (assumed)", 0.01], ["host_ms", "host + misc per step (ms)", 1], ["overlap", "copy overlap fraction", 0.05], ["pp_overlap", "prefill copy overlap", 0.05]
+];
+function buildParams() {
+  const f = FIELDS.find(x => x.id === "drafter"); f.opts = DRAFTERS.map((d, i) => [d.name, i]);
+  const html = FIELDS.map(x => {
+    const input = x.type === "select"
+      ? `<select id="p_${x.id}">${x.opts.map(o => `<option value="${o[1]}" ${String(o[1]) === String(x.def) ? "selected" : ""}>${o[0]}</option>`).join("")}</select>`
+      : `<input id="p_${x.id}" type="number" step="${x.step}" value="${x.def}">`;
+    return `<div class="field"><label for="p_${x.id}">${x.label}</label>${input}${x.hint ? `<span class="hint">${x.hint}</span>` : ""}</div>`;
+  }).join("");
+  const keep = {}; document.querySelectorAll("#params select, #params input").forEach(el => keep[el.id] = el.value);
+  document.getElementById("params").innerHTML = html;
+  Object.entries(keep).forEach(([k, v]) => { const el = document.getElementById(k); if (el && [...(el.options || [])].some(o => o.value === v) || (el && el.tagName === "INPUT")) el.value = v; });
+  if (!document.getElementById("params2").children.length)
+    document.getElementById("params2").innerHTML = FIELDS2.map(([k, l, s]) => `<div class="field"><label for="p_${k}">${l}</label><input id="p_${k}" type="number" step="${s}" value="${DEF[k]}"></div>`).join("");
+  document.getElementById("draftertable").innerHTML = DRAFTERS.map(d => `<tr><td>${d.name}</td><td class="n">${d.mib}</td><td class="n">${d.ms}</td><td>${d.src}</td></tr>`).join("");
+}
+const val = id => document.getElementById("p_" + id).value;
+const num = id => parseFloat(val(id));
+function readParams() {
+  const p = { ...DEF };
+  ["weights_gib", "mtp_head_gib", "vram_gib", "reserve_gib", "vram_bw", "tflops", "pcie_gbs", "dram_gbs", "mtp_ms", "draft_len", "accept", "max_stream_gib"].forEach(k => { const v = num(k); if (isFinite(v)) p[k] = v; });
+  FIELDS2.forEach(([k]) => { const v = num(k); if (isFinite(v)) p[k] = v; });
+  p.mode = val("mode"); p.exact = val("exact") === "1"; p.ub = parseInt(val("ub"), 10); p.kvroute = val("kvroute");
+  const d = DRAFTERS[parseInt(val("drafter"), 10)] || DRAFTERS[0]; p.drafter_mib = d.mib; p.draft_ms = d.ms;
+  p.draft_len = Math.max(1, Math.round(p.draft_len)); if (p.mode === "dflash") p.draft_len = Math.min(7, p.draft_len);
+  return p;
+}
+function onParamChange(e) {
+  const id = e.target.id;
+  const setv = (k, v) => { document.getElementById("p_" + k).value = v; };
+  if (id === "p_model" && val("model") !== "custom") setv("weights_gib", val("model"));
+  if (id === "p_weights_gib") setv("model", MODELS.some(m => String(m[1]) === val("weights_gib")) ? val("weights_gib") : "custom");
+  if (id === "p_vram_preset" && val("vram_preset") !== "custom") setv("vram_gib", val("vram_preset"));
+  if (id === "p_vram_gib") setv("vram_preset", [8, 10, 12, 16, 24].includes(num("vram_gib")) ? String(num("vram_gib")) : "custom");
+  if (id === "p_pcie_preset" && val("pcie_preset") !== "custom") setv("pcie_gbs", val("pcie_preset"));
+  if (id === "p_dram_preset" && val("dram_preset") !== "custom") setv("dram_gbs", val("dram_preset"));
+  if (id === "p_mode") { setv("draft_len", val("mode") === "mtp" ? 4 : 7); }
+  if (id === "p_mode" || id === "p_accept_preset") {
+    const ap = val("accept_preset"), m = val("mode");
+    if (ap !== "custom") setv("accept", m === "mtp" ? ({ code: 4.27, tasks: 3.3, agent: 2.9 })[ap] : ({ code: 5.5, tasks: 3.9, agent: 3.0 })[ap]);
+  }
+  if (id === "p_accept") setv("accept_preset", "custom");
+  renderEstimator();
+}
+function measuredOverlay(model, key) {
+  if (model === "IQ3_XXS") return key === "tps" ? pts("xx_q4q4_dflash_exact_code", "tps") : pts("xx_prefill_dflash_fresh", "pp").filter(q => !q.proj);
+  return key === "tps" ? pts("s_q4q4_dflash_stream_code", "tps") : pts("s_q4q4_mtp_stream", "pp");
+}
+function renderEstimator() {
+  const p = readParams();
+  const swap = !document.getElementById("e1swap").checked, showMeas = document.getElementById("e1meas").checked, showNo = document.getElementById("e1nospec").checked;
+  const colors = [css("--s1"), css("--s2"), css("--s3"), css("--s4")];
+  const dd = [], pp = [];
+  KVPAIRS.forEach((kv, i) => {
+    const cd = [], cp = []; let oom = null;
+    for (let n = 2048; n <= 262144; n += 2048) {
+      const e = est(p, n, kv, p.mode);
+      if (!e.ok) { oom = n; break; }
+      cd.push({ ctx: n, v: e.tps, reg: e.region, note: `${e.r} KV layers resident, ${e.s} staged${e.S > 0 ? ", " + e.S.toFixed(0) + " MiB weights streamed" : ""}` });
+      cp.push({ ctx: n, v: e.pp, reg: e.region, note: "" });
+    }
+    const lab = `${kv} KV${oom ? " (out of memory at " + fmtK(oom) + ")" : ""}`;
+    dd.push(mkDataset(lab, colors[i], cd, swap, { r: 0 }));
+    pp.push(mkDataset(lab, colors[i], cp, swap, { r: 0 }));
+    // each curve gets its own region boundaries, marked on the curve itself
+    const md = [], mp = [];
+    for (let j = 1; j < cd.length; j++) if (cd[j].reg !== cd[j - 1].reg) {
+      const note = `${kv}: ${REGION[cd[j - 1].reg].label} -> ${REGION[cd[j].reg].label}`;
+      md.push({ ...cd[j], proj: true, note }); mp.push({ ...cp[j], proj: true, note });
+    }
+    if (md.length) { dd.push(mkDataset(`${kv}: region change`, colors[i], md, swap, { line: false, style: "rectRot", r: 6, order: 0 })); pp.push(mkDataset(`${kv}: region change`, colors[i], mp, swap, { line: false, style: "rectRot", r: 6, order: 0 })); }
+    if (oom && cd.length) {
+      const last = cd[cd.length - 1], lastp = cp[cp.length - 1];
+      dd.push(mkDataset(`${kv}: out of memory`, colors[i], [{ ...last, note: "next point does not fit" }], swap, { line: false, style: "crossRot", r: 8 }));
+      pp.push(mkDataset(`${kv}: out of memory`, colors[i], [{ ...lastp, note: "next point does not fit" }], swap, { line: false, style: "crossRot", r: 8 }));
+    }
+  });
+  if (showNo && p.mode !== "none") {
+    const cn = [];
+    for (let n = 2048; n <= 262144; n += 2048) { const e = est(p, n, "q4_0/q4_0", "none"); if (!e.ok) break; cn.push({ ctx: n, v: e.tps, note: "no speculation" }); }
+    dd.push(mkDataset("no speculation, q4_0/q4_0", css("--est"), cn, swap, { r: 0, dash: [6, 4] }));
+  }
+  const mdl = Math.abs(p.weights_gib - 11.28) < 0.01 ? "IQ3_S" : (Math.abs(p.weights_gib - 9.72) < 0.01 ? "IQ3_XXS" : null);
+  if (showMeas && mdl) {
+    dd.push(mkDataset(`measured ${mdl} (DFlash, code prompt)`, css("--ink"), measuredOverlay(mdl, "tps"), swap, { line: false, r: 5, style: "rect", order: 0 }));
+    pp.push(mkDataset(`measured ${mdl} prefill`, css("--ink"), measuredOverlay(mdl, "pp"), swap, { line: false, r: 5, style: "rect", order: 0 }));
+  }
+  const bands = bandsFor(p, e1band, p.mode, 262144);
+  draw("e1d", "scatter", dd, baseOptions("decode tokens/s (estimate)", swap, bands, 40));
+  draw("e1p", "scatter", pp, baseOptions("prefill tokens/s (estimate)", swap, bands, 400));
+  const pc = Math.min(p.pcie_gbs, p.dram_gbs / 1.4);
+  document.getElementById("e1note").innerHTML = `Effective link rate ${pc.toFixed(1)} GB/s${pc < p.pcie_gbs ? " (limited by host DRAM)" : ""}. Shaded regions follow the ${e1band} curve; the diamonds on each curve mark where that curve moves into its next region, so each KV pair shows its own boundaries. ${mdl ? "Black squares are measured points for this model." : "Measured overlay hidden: the weight size doesn't match a measured model."} Acceptance is held constant at ${p.mode === "none" ? 1 : p.accept} tokens per step across context; real acceptance moves with the text (4.0-6.1 on the greedy code prompt between 8K and 200K, about 3.0 in a real agent session with thinking on; pick that preset to see it).`;
+  renderReadout(p); renderFit(p);
+}
+function renderReadout(p) {
+  const n = parseInt(document.getElementById("inspect").value, 10), kv = document.getElementById("inspectkv").value;
+  document.getElementById("inspectv").textContent = `${fmtK(n)} (${n.toLocaleString()})`;
+  const e = est(p, n, kv, p.mode);
+  const box = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  if (!e.ok) { document.getElementById("readout").innerHTML = box("result", "does not fit") + box("KV per layer", e.L.toFixed(0) + " MiB") + box("KV capacity", e.cap.toFixed(0) + " MiB"); return; }
+  document.getElementById("readout").innerHTML = [
+    box("region", REGION[e.region].label), box("decode", e.tps.toFixed(1) + " t/s"), box("prefill", e.pp.toFixed(0) + " t/s"),
+    box("step", e.step.toFixed(0) + " ms"), box("compute", e.comp.toFixed(0) + " ms"), box("PCIe copies", e.dma.toFixed(0) + " ms (" + e.exposed.toFixed(0) + " exposed)"),
+    box("KV layers resident / staged", `${e.r} / ${e.s}`), box("weights streamed", e.S.toFixed(0) + " MiB"), box("KV capacity on GPU", Math.max(0, e.cap).toFixed(0) + " MiB")
+  ].join("");
+}
+const FIT = [
+  ["IQ3_XXS DFlash d7, 8K", 9.72, 8829, "dflash", { draft_len: 7, accept: 5.51 }, 54.19, "tps", "step 101.1 ms, 5.51 tok/step"],
+  ["IQ3_XXS DFlash d7, 64K", 9.72, 65532, "dflash", { draft_len: 7, accept: 4.38 }, 38.51, "tps", "4.38 tok/step"],
+  ["IQ3_XXS DFlash d6, 128K", 9.72, 131065, "dflash", { draft_len: 6, accept: 5.45 }, 35.56, "tps", "5.45 tok/step"],
+  ["IQ3_XXS DFlash d7, 200K (task mean)", 9.72, 199600, "dflash", { draft_len: 7, accept: 4.01 }, 14.21, "tps", "4.01 tok/step, step 281.9 ms"],
+  ["IQ3_XXS no speculation, 8K, exact", 9.72, 8188, "none", { draft_len: 0 }, 15.66, "tps", "MMQ route"],
+  ["IQ3_XXS no speculation, 8K, vector route", 9.72, 8188, "none", { draft_len: 0, exact: false }, 20.64, "tps", ""],
+  ["IQ3_XXS no speculation, 200K, vector route", 9.72, 200369, "none", { draft_len: 0, exact: false }, 5.50, "tps", ""],
+  ["IQ3_XXS q8_0/q4_0 MTP d4, 8K", 9.72, 8188, "mtp", { draft_len: 4, accept: 4.27, exact: false, kv: "q8_0/q4_0", kvroute: "vec" }, 35.44, "tps", "vector route; acceptance from the q4 run"],
+  ["IQ3_XXS q8_0/q4_0 DFlash d7, 8K, MMA route", 9.72, 8829, "dflash", { draft_len: 7, accept: 6.40, kv: "q8_0/q4_0" }, 56.83, "tps", "report 60.1, 111.7 ms/step"],
+  ["IQ3_XXS q8_0/q4_0 DFlash d7, 32K, MMA route", 9.72, 32639, "dflash", { draft_len: 7, accept: 2.91, kv: "q8_0/q4_0" }, 23.13, "tps", "report 60.2, 124.8 ms/step"],
+  ["IQ3_XXS q5_0/q4_0 MTP d4, 8K", 9.72, 8188, "mtp", { draft_len: 4, accept: 4.27, exact: false, kv: "q5_0/q4_0", kvroute: "vec" }, 31.96, "tps", "fitted point, acceptance from the q4 run"],
+  ["IQ3_XXS q5_0/q4_0 MTP d4, 64K", 9.72, 65532, "mtp", { draft_len: 4, accept: 4.27, exact: false, kv: "q5_0/q4_0", kvroute: "vec" }, 12.85, "tps", "fitted point"],
+  ["IQ3_XXS q5_0/q4_0 no speculation, 32K", 9.72, 32755, "none", { draft_len: 0, exact: false, kv: "q5_0/q4_0", kvroute: "vec" }, 15.95, "tps", "fitted point"],
+  ["IQ3_XXS q8_0/q4_0 DFlash d7, 64K, MMA, best measured (12/16 staged)", 9.72, 65532, "dflash", { draft_len: 7, accept: 6.10, kv: "q8_0/q4_0" }, 38.65, "tps", "report 60.6, 156.5 ms/step; 9/16 staged OOMed at eval, the estimator still picks it: optimistic at 64K"],
+  ["IQ3_XXS q8_0/q4_0 DFlash d7, 128K, MMA, staged + 513 MiB streamed", 9.72, 131065, "dflash", { draft_len: 7, accept: 5.77, kv: "q8_0/q4_0" }, 17.59, "tps", "report 60.6, 328.2 ms/step"],
+  ["IQ3_S DFlash d7, 8K", 11.28, 8829, "dflash", { draft_len: 7, accept: 5.91 }, 49.70, "tps", "tok/step derived from ~119 ms"],
+  ["IQ3_S DFlash d7, 64K", 11.28, 65532, "dflash", { draft_len: 7, accept: 4.0 }, 25.35, "tps", "4.00 tok/step"],
+  ["IQ3_S DFlash d7, 128K", 11.28, 131065, "dflash", { draft_len: 7, accept: 4.0 }, 15.25, "tps", "4.00 tok/step"],
+  ["IQ3_XXS prefill, 2K, ub 2048", 9.72, 2048, "none", { ub: 2048 }, 565, "pp", ""],
+  ["IQ3_XXS prefill, 34K, ub 2048", 9.72, 33939, "none", { ub: 2048 }, 504.1, "pp", ""],
+  ["IQ3_XXS prefill, 68K, ub 512", 9.72, 67966, "none", { ub: 512 }, 416.6, "pp", ""],
+  ["IQ3_XXS prefill with DFlash, 8.8K, ub 128", 9.72, 8829, "dflash", { draft_len: 7 }, 450, "pp", ""],
+  ["IQ3_XXS prefill MTP, 200K, ub 128 (Oct 20)", 9.72, 200369, "mtp", { draft_len: 4 }, 205.4, "pp", "13 layers staged"],
+  ["IQ3_XXS q5_0/q4_0 prefill MTP, 32K, ub 128", 9.72, 32755, "mtp", { draft_len: 4, kv: "q5_0/q4_0", kvroute: "vec" }, 89.5, "pp", "fitted point"],
+  ["IQ3_S prefill MTP, 64K, ub 32 (streamed)", 11.28, 65532, "mtp", { draft_len: 4, ub: 32 }, 178, "pp", ""],
+  ["IQ3_S prefill MTP, 128K, ub 32 (streamed)", 11.28, 131065, "mtp", { draft_len: 4, ub: 32 }, 146, "pp", ""]
+];
+function renderFit(cur) {
+  const consts = {}; FIELDS2.forEach(([k]) => consts[k] = cur[k]);
+  document.getElementById("fittable").innerHTML = FIT.map(([name, w, n, mode, ov, meas, key, basis]) => {
+    const p = { ...DEF, ...consts, weights_gib: w, ...ov };
+    const e = est(p, n, ov.kv || "q4_0/q4_0", mode);
+    if (!e.ok) return `<tr><td>${name}</td><td class="n">${n.toLocaleString()}</td><td class="n">${meas}</td><td class="n">does not fit</td><td class="n err-bad">-</td><td>${basis}</td></tr>`;
+    const v = key === "pp" ? e.pp : e.tps, err = (v / meas - 1) * 100, cls = Math.abs(err) <= 10 ? "err-ok" : (Math.abs(err) <= 20 ? "err-warn" : "err-bad");
+    return `<tr><td>${name}</td><td class="n">${n.toLocaleString()}</td><td class="n">${meas} ${key === "pp" ? "pp" : ""} t/s</td><td class="n">${v.toFixed(1)}</td><td class="n ${cls}">${err >= 0 ? "+" : ""}${err.toFixed(1)}%</td><td>${basis}</td></tr>`;
+  }).join("");
+}
+buildParams();
+document.getElementById("params").addEventListener("change", onParamChange);
+document.getElementById("params2").addEventListener("change", renderEstimator);
+["e1swap", "e1meas", "e1nospec", "inspectkv"].forEach(id => document.getElementById(id).addEventListener("change", renderEstimator));
+document.getElementById("inspect").addEventListener("input", () => renderReadout(readParams()));
+document.getElementById("dadd").addEventListener("click", () => {
+  const name = document.getElementById("dname").value.trim() || "custom drafter", mib = parseFloat(document.getElementById("dmib").value), ms = parseFloat(document.getElementById("dms").value);
+  if (!isFinite(mib) || !isFinite(ms)) return;
+  DRAFTERS.push({ name: `${name} (${mib} MiB)`, mib, ms, src: "added here" });
+  buildParams(); document.getElementById("p_drafter").value = String(DRAFTERS.length - 1); renderEstimator();
+});
+
+/* ---------- region pickers (regions differ per KV pair) ---------- */
+let m1band = "q4_0/q4_0", e1band = "q4_0/q4_0";
+function bandChips(id, get, set, render) {
+  const el = document.getElementById(id);
+  const paint = () => { el.innerHTML = KVPAIRS.map(k => `<button type="button" class="chip" data-kv="${k}" aria-pressed="${k === get()}">${k}</button>`).join(""); };
+  paint();
+  el.addEventListener("click", e => { const b = e.target.closest("[data-kv]"); if (!b) return; set(b.dataset.kv); paint(); render(); });
+}
+bandChips("m1band", () => m1band, v => { m1band = v; }, () => renderMeasured());
+bandChips("e1band", () => e1band, v => { e1band = v; }, () => renderEstimator());
+
+/* ---------- boot + theme changes ---------- */
+function renderAll() { renderMeasured(); renderEstimator(); }
+function boot() { if (typeof Chart === "undefined") { document.querySelectorAll(".chartbox").forEach(b => b.innerHTML = '<p class="cap">The chart library did not load. The data tables on this page still hold every number.</p>'); return; } renderAll(); }
+boot();
+new MutationObserver(() => typeof Chart !== "undefined" && renderAll()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => typeof Chart !== "undefined" && renderAll()); } catch (e) {}
+</script>

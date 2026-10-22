@@ -22,6 +22,11 @@ The usual llama.cpp CMake build works from the repository root. Project-specific
 material (measured report, design notes, launchers, benchmarks) lives in
 [`rtx3060/`](rtx3060/).
 
+**Browsable report (GitHub Pages front page):** [`docs/index.html`](docs/index.html).
+Enable Pages for this repository with **Source: Deploy from a branch**, branch `main`,
+folder `/docs`; the site is then served at `https://<user>.github.io/<repo>/`. The same
+file is kept at [`rtx3060/docs/qwen27b_rtx3060_report.html`](rtx3060/docs/qwen27b_rtx3060_report.html).
+
 ## What this fork changes
 
 - **Staged host KV (the main change).** The canonical KV cache can live in pinned host
