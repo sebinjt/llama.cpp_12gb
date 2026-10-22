@@ -1,0 +1,83 @@
+// ---------------------------------------------------------------------------------------------
+// (c4) FULL kernel v7: like v1 (direct register unpack, global reads) but one warp owns 32 rows
+//      (two 16-row mma tiles). Doubles the independent dependency chains per warp and shares the
+//      activation B fragments between the two tiles. Same math and k order as k_mma.
+// ---------------------------------------------------------------------------------------------
+template<int TY>
+__global__ void k_mma7(const uint8_t * __restrict__ W, const int8_t * __restrict__ Aq,
+                       const float * __restrict__ Ad, const uint2 * __restrict__ mt,
+                       int R, int K, int rowbytes, int ncols, int ostride, float * __restrict__ out) {
+    constexpr int BLK = BB<TY>::v;
+    constexpr int NWARPS = 4;
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    const int t = lane & 3, gr = lane >> 2;
+    const int nb = K >> 8, rowtiles = R >> 5, ntiles = (ncols + 7) >> 3;   // 32 rows per warp
+    for (int rt = blockIdx.x * NWARPS + warp; rt < rowtiles; rt += NWARPS * (int)gridDim.x) {
+        const uint8_t * wA0 = W + (size_t)(rt*32 + gr    ) * rowbytes;
+        const uint8_t * wB0 = W + (size_t)(rt*32 + gr + 8) * rowbytes;
+        const uint8_t * wA1 = W + (size_t)(rt*32 + gr + 16) * rowbytes;
+        const uint8_t * wB1 = W + (size_t)(rt*32 + gr + 24) * rowbytes;
+        float acc[2][2][4];
+#pragma unroll
+        for (int tl = 0; tl < 2; ++tl)
+#pragma unroll
+            for (int nt = 0; nt < 2; ++nt)
+#pragma unroll
+                for (int i = 0; i < 4; ++i) acc[tl][nt][i] = 0.0f;
+        for (int b = 0; b < nb; ++b) {
+            const uint8_t * sA0 = wA0 + (size_t)b * BLK;
+            const uint8_t * sB0 = wB0 + (size_t)b * BLK;
+            const uint8_t * sA1 = wA1 + (size_t)b * BLK;
+            const uint8_t * sB1 = wB1 + (size_t)b * BLK;
+            const float dA0 = U<TY>::dval(sA0), dB0 = U<TY>::dval(sB0);
+            const float dA1 = U<TY>::dval(sA1), dB1 = U<TY>::dval(sB1);
+#pragma unroll
+            for (int b32 = 0; b32 < 8; ++b32) {
+                const int kb = b*8 + b32;
+                const int8_t * ab = Aq + (size_t)kb * (16*32);
+                int a0, a1, a2, a3, c0, c1, c2, c3;
+                unpack_A<TY>(sA0, sB0, b32, t, mt, a0, a1, a2, a3);
+                unpack_A<TY>(sA1, sB1, b32, t, mt, c0, c1, c2, c3);
+                const float w0A = dA0 * U<TY>::scale(sA0, b32), w0B = dB0 * U<TY>::scale(sB0, b32);
+                const float w1A = dA1 * U<TY>::scale(sA1, b32), w1B = dB1 * U<TY>::scale(sB1, b32);
+                for (int nt = 0; nt < 2; ++nt) {
+                    if (nt >= ntiles) break;
+                    const int col = nt*8 + gr;
+                    const int b0 = *(const int *)(ab + col*32 + 4*t);
+                    const int b1 = *(const int *)(ab + col*32 + 4*t + 16);
+                    const float da0 = Ad[kb*16 + nt*8 + 2*t], da1 = Ad[kb*16 + nt*8 + 2*t + 1];
+                    int e0 = 0, e1 = 0, e2 = 0, e3 = 0;
+                    mma16832(e0, e1, e2, e3, a0, a1, a2, a3, b0, b1);
+                    acc[0][nt][0] = fmaf((float)e0, w0A*da0, acc[0][nt][0]);
+                    acc[0][nt][1] = fmaf((float)e1, w0A*da1, acc[0][nt][1]);
+                    acc[0][nt][2] = fmaf((float)e2, w0B*da0, acc[0][nt][2]);
+                    acc[0][nt][3] = fmaf((float)e3, w0B*da1, acc[0][nt][3]);
+                    int f0 = 0, f1 = 0, f2 = 0, f3 = 0;
+                    mma16832(f0, f1, f2, f3, c0, c1, c2, c3, b0, b1);
+                    acc[1][nt][0] = fmaf((float)f0, w1A*da0, acc[1][nt][0]);
+                    acc[1][nt][1] = fmaf((float)f1, w1A*da1, acc[1][nt][1]);
+                    acc[1][nt][2] = fmaf((float)f2, w1B*da0, acc[1][nt][2]);
+                    acc[1][nt][3] = fmaf((float)f3, w1B*da1, acc[1][nt][3]);
+                }
+            }
+        }
+        for (int tl = 0; tl < 2; ++tl) {
+            for (int nt = 0; nt < 2; ++nt) {
+                if (nt >= ntiles) break;
+                const int c0 = nt*8 + 2*t;
+                const int r0 = rt*32 + tl*16 + gr;
+                float * o0 = out + (size_t)(r0    ) * ostride + c0;
+                float * o1 = out + (size_t)(r0 + 8) * ostride + c0;
+                if (c0 + 0 < ncols) { o0[0] = acc[tl][nt][0]; o1[0] = acc[tl][nt][2]; }
+                if (c0 + 1 < ncols) { o0[1] = acc[tl][nt][1]; o1[1] = acc[tl][nt][3]; }
+            }
+        }
+    }
+}
+
+template<int TY>
+static void launch_v7(const uint8_t * W, const int8_t * Aq, const float * Ad, const uint2 * mt,
+                      int R, int K, int rb, int ncols, float * out, int gdim, cudaStream_t st) {
+    k_mma7<TY><<<gdim, 128, 0, st>>>(W, Aq, Ad, mt, R, K, rb, ncols, 16, out);
+}

@@ -1,0 +1,98 @@
+// ---------------------------------------------------------------------------------------------
+// (a) LOAD-only kernels
+//   k_stream   : contiguous, 16 B per lane over the whole tensor (bandwidth ceiling)
+//   k_tileload : the planned per-warp row-tile pattern, coalesced u32, no unpack
+// ---------------------------------------------------------------------------------------------
+__global__ void k_stream(const uint4 * __restrict__ p, size_t n, uint32_t * __restrict__ sink) {
+    size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+    const size_t stride = (size_t)gridDim.x * blockDim.x;
+    uint4 a = make_uint4(0,0,0,0);
+    for (; i < n; i += stride) {
+        uint4 v = __ldg(p + i);
+        a.x ^= v.x; a.y ^= v.y; a.z ^= v.z; a.w ^= v.w;
+    }
+    if ((a.x ^ a.y ^ a.z ^ a.w) == 0x7f3d5a1b) sink[0] = a.x;
+}
+
+__global__ void k_tileload(const uint8_t * __restrict__ W, int R, int K, int rowbytes,
+                           uint32_t * __restrict__ sink) {
+    constexpr int NWARPS = 4;
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    const int nb = K >> 8, rowtiles = R >> 4;
+    uint32_t s = 0;
+    for (int rt = blockIdx.x * NWARPS + warp; rt < rowtiles; rt += NWARPS * (int)gridDim.x) {
+        for (int b = 0; b < nb; ++b) {
+            // 16 rows x 112 B (110 B rounded up) = 448 u32 chunks, 32 lanes -> 14 iterations
+            const uint8_t * base = W + (size_t)(rt*16) * rowbytes + (size_t)b * 112;
+#pragma unroll
+            for (int it = 0; it < 14; ++it) {
+                const int c   = it*32 + lane;
+                const int row = c / 28;
+                const int off = (c % 28) * 4;
+                s += *(const uint32_t *)(base + (size_t)row * rowbytes + off);
+            }
+        }
+    }
+    if (s == 0x7f3d5a1bU) sink[0] = s;
+}
+
+// ---------------------------------------------------------------------------------------------
+// data generation
+// ---------------------------------------------------------------------------------------------
+static uint64_t rng_state = 0x243F6A8885A308D3ULL;
+static uint64_t rnd64() { rng_state ^= rng_state << 13; rng_state ^= rng_state >> 7; rng_state ^= rng_state << 17; return rng_state; }
+static uint8_t  rnd8()  { return (uint8_t)(rnd64() >> 27); }
+static float    rndf()  { return (float)((rnd64() >> 11) * (1.0 / 9007199254740992.0)); }   // [0,1)
+
+// produce `nrows` template rows of packed weights for (type, K)
+static std::vector<uint8_t> make_rows(int ty, int K, int nrows) {
+    const int rb = (K/256) * blk_bytes_h(ty);
+    std::vector<uint8_t> out((size_t)rb * nrows);
+    for (int r = 0; r < nrows; ++r) {
+        uint8_t * p = out.data() + (size_t)r * rb;
+        for (int b = 0; b < K/256; ++b) {
+            uint8_t * q = p + b * blk_bytes_h(ty);
+            const float d = 0.0015f + 0.004f * rndf();
+            const __half dh = __float2half(d);
+            memcpy(q, &dh, 2);
+            for (int i = 2; i < blk_bytes_h(ty); ++i) q[i] = rnd8();
+        }
+    }
+    return out;
+}
+
+__global__ void k_fill(const uint8_t * __restrict__ tmpl, int ntmpl, uint8_t * __restrict__ W,
+                       size_t nrows, int rb) {
+    size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+    const size_t stride = (size_t)gridDim.x * blockDim.x;
+    const size_t tot = nrows * rb;
+    for (; i < tot; i += stride) {
+        const size_t r = i / rb, o = i % rb;
+        W[i] = tmpl[(r % ntmpl) * (size_t)rb + o];
+    }
+}
+
+// q8_1 quantization: Aq[kb][16][32] int8, Ad[kb][16] float (per column, per 32-element block)
+static void quant_acts(const std::vector<float> & x, int K, int ncols,
+                       std::vector<int8_t> & Aq, std::vector<float> & Ad) {
+    const int nb32 = K / 32;
+    Aq.assign((size_t)nb32 * 16 * 32, 0);
+    Ad.assign((size_t)nb32 * 16, 0.0f);
+    for (int c = 0; c < ncols; ++c) {
+        for (int b = 0; b < nb32; ++b) {
+            const float * xs = x.data() + (size_t)c * K + b * 32;
+            float amax = 0;
+            for (int j = 0; j < 32; ++j) amax = fmaxf(amax, fabsf(xs[j]));
+            const float d = amax / 127.0f;
+            const float id = d > 0 ? 1.0f / d : 0.0f;
+            Ad[(size_t)b * 16 + c] = d;
+            for (int j = 0; j < 32; ++j) {
+                int v = (int)roundf(xs[j] * id);
+                v = v < -127 ? -127 : (v > 127 ? 127 : v);
+                Aq[((size_t)b * 16 + c) * 32 + j] = (int8_t)v;
+            }
+        }
+    }
+}
+

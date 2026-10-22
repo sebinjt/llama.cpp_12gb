@@ -1,0 +1,154 @@
+// ---------------------------------------------------------------------------------------------
+// (c3) FULL kernel v5: staged 16 rows in shared with an odd-word row stride (conflict-free banks),
+//      +2 byte shift so qs/signs are 4-byte aligned, u32 metadata loads shared by the quad.
+//      Same math and k order as k_mma (bit-identical output).
+// ---------------------------------------------------------------------------------------------
+template<int TY> struct V5S {
+    static constexpr int BLK = BB<TY>::v;
+    static constexpr int RAW = 116;      // 110 bytes + 2 shift + 4 pad; 29 words per row -> odd stride
+    static constexpr int SH  = 2;        // shift so that qs is 4-byte aligned in shared
+};
+
+// one row, one 32-k block -> the two A-fragment groups of this row (a0 = k 4t..4t+3, a2 = 4t+16..+19)
+template<int TY>
+__device__ __forceinline__ void v5_unpack(const uint8_t * sb, int blk, int t,
+                                          const uint32_t * g32, const uint2 * maskt,
+                                          int & a0, int & a2) {
+    if constexpr (TY == TY_IQ3S) {
+        const uint32_t qw0 = *(const uint32_t *)(sb +  4 + 8*blk);   // qs[0..3]
+        const uint32_t qw1 = *(const uint32_t *)(sb +  8 + 8*blk);   // qs[4..7]
+        const int qhb = sb[68 + blk];
+        const uint32_t sg = *(const uint32_t *)(sb + 76 + 4*blk);    // 4 sign bytes
+        const int qA = (int)((qw0 >> (8*t)) & 0xFF);
+        const int qB = (int)((qw1 >> (8*t)) & 0xFF);
+        const int hbA = (qhb >> t) & 1, hbB = (qhb >> (t+4)) & 1;
+        const uint2 mA = maskt[(sg >> (8*(t>>1))) & 0xFF];
+        const uint2 mB = maskt[(sg >> (8*((t>>1)+2))) & 0xFF];
+        const int miA = (int)((t & 1) ? mA.y : mA.x);
+        const int miB = (int)((t & 1) ? mB.y : mB.x);
+        a0 = (int)__vsub4((int)g32[qA | (hbA << 8)] ^ miA, miA);
+        a2 = (int)__vsub4((int)g32[qB | (hbB << 8)] ^ miB, miB);
+    } else if constexpr (TY == TY_IQ3XXS) {
+        const uint32_t qw0 = *(const uint32_t *)(sb +  4 + 8*blk);
+        const uint32_t qw1 = *(const uint32_t *)(sb +  8 + 8*blk);
+        const uint32_t aux = *(const uint32_t *)(sb + 68 + 4*blk);
+        const int qA = (int)((qw0 >> (8*t)) & 0xFF);
+        const int qB = (int)((qw1 >> (8*t)) & 0xFF);
+        const uint2 mA = maskt[(aux >> (7*(t>>1))) & 127u];
+        const uint2 mB = maskt[(aux >> (7*((t>>1)+2))) & 127u];
+        const int miA = (int)((t & 1) ? mA.y : mA.x);
+        const int miB = (int)((t & 1) ? mB.y : mB.x);
+        a0 = (int)__vsub4((int)g32[qA] ^ miA, miA);
+        a2 = (int)__vsub4((int)g32[qB] ^ miB, miB);
+    } else if constexpr (TY == TY_IQ2S) {
+        const uint32_t qs  = *(const uint32_t *)(sb + 4 + 4*blk);    // 4 grid bytes
+        const uint32_t sg  = *(const uint32_t *)(sb + 36 + 4*blk);   // 4 sign bytes
+        const int qhb = sb[68 + blk];
+        const int lA = t >> 1, lB = lA + 2, e = t & 1;
+        const int idxA = (int)((qs >> (8*lA)) & 0xFF) | (int)(((qhb >> (2*lA)) & 3) << 8);
+        const int idxB = (int)((qs >> (8*lB)) & 0xFF) | (int)(((qhb >> (2*lB)) & 3) << 8);
+        const uint2 mA = maskt[(sg >> (8*lA)) & 0xFF];
+        const uint2 mB = maskt[(sg >> (8*lB)) & 0xFF];
+        const int miA = (int)(e ? mA.y : mA.x);
+        const int miB = (int)(e ? mB.y : mB.x);
+        a0 = (int)__vsub4((int)(uint32_t)(((const uint64_t *)g32)[idxA] >> (32*e)) ^ miA, miA);
+        a2 = (int)__vsub4((int)(uint32_t)(((const uint64_t *)g32)[idxB] >> (32*e)) ^ miB, miB);
+    } else {
+        a0 = 0; a2 = 0;
+    }
+}
+
+template<int TY>
+__global__ void k_mma5(const uint8_t * __restrict__ W, const int8_t * __restrict__ Aq,
+                       const float * __restrict__ Ad, const uint2 * __restrict__ d_mask,
+                       int R, int K, int rowbytes, int ncols, int ostride, float * __restrict__ out) {
+    extern __shared__ uint8_t smem5[];
+    const int grid_bytes = (TY == TY_IQ3S) ? 2048 : (TY == TY_IQ3XXS) ? 1024 : (TY == TY_IQ2S) ? 8192 : 0;
+    const int mask_bytes = (TY == TY_IQ3XXS) ? 1024 : 2048;
+    uint8_t * sh_grid = smem5;
+    const uint2 * sh_mask = (const uint2 *)(smem5 + grid_bytes);
+    const int raw_off = grid_bytes + mask_bytes;
+    const int NWARPS = 4;
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    const int t = lane & 3, gr = lane >> 2;
+    const int nb = K >> 8, rowtiles = R >> 4, ntiles = (ncols + 7) >> 3;
+    uint8_t * sh_raw = smem5 + raw_off + warp * 16 * V5S<TY>::RAW;
+
+    {
+        if constexpr (TY == TY_IQ3S) {
+            for (int i = threadIdx.x; i < grid_bytes/4; i += blockDim.x) ((uint32_t *)sh_grid)[i] = iq3s_grid[i];
+        } else if constexpr (TY == TY_IQ3XXS) {
+            for (int i = threadIdx.x; i < grid_bytes/4; i += blockDim.x) ((uint32_t *)sh_grid)[i] = iq3xxs_grid[i];
+        } else if constexpr (TY == TY_IQ2S) {
+            for (int i = threadIdx.x; i < grid_bytes/8; i += blockDim.x) ((uint64_t *)sh_grid)[i] = iq2s_grid[i];
+        }
+        for (int i = threadIdx.x; i < mask_bytes/8; i += blockDim.x)
+            ((uint2 *)(smem5 + grid_bytes))[i] = __ldg(d_mask + i);
+    }
+    __syncthreads();
+
+    for (int rt = blockIdx.x * NWARPS + warp; rt < rowtiles; rt += NWARPS * (int)gridDim.x) {
+        const uint8_t * base = W + (size_t)(rt*16) * rowbytes;
+        float acc[2][4];
+#pragma unroll
+        for (int nt = 0; nt < 2; ++nt) for (int i = 0; i < 4; ++i) acc[nt][i] = 0.0f;
+        for (int b = 0; b < nb; ++b) {
+#pragma unroll
+            for (int it = 0; it < 16*V5S<TY>::RAW/2/32; ++it) {
+                const int c = it*32 + lane;
+                const int row = c / (V5S<TY>::RAW/2), off = (c % (V5S<TY>::RAW/2)) * 2;
+                if (off + V5S<TY>::SH + 1 < V5S<TY>::RAW)
+                    *(uint16_t *)(sh_raw + row*V5S<TY>::RAW + off + V5S<TY>::SH) =
+                        *(const uint16_t *)(base + (size_t)row * rowbytes + (size_t)b*V5S<TY>::BLK + off);
+            }
+            __syncwarp();
+            const uint8_t * sbA = sh_raw + gr*V5S<TY>::RAW;
+            const uint8_t * sbB = sh_raw + (gr+8)*V5S<TY>::RAW;
+            const float dA = __half2float(*(const __half *)sbA), dB = __half2float(*(const __half *)sbB);
+            const uint32_t * g32 = (const uint32_t *)sh_grid;
+#pragma unroll
+            for (int b32 = 0; b32 < 8; ++b32) {
+                int a0, a2, c0, c2;
+                v5_unpack<TY>(sbA, b32, t, g32, sh_mask, a0, a2);
+                v5_unpack<TY>(sbB, b32, t, g32, sh_mask, c0, c2);
+                const int a1 = c0, a3 = c2;
+                const float swA = dA * U<TY>::scale(sbA, b32);
+                const float swB = dB * U<TY>::scale(sbB, b32);
+                const int kb = b*8 + b32;
+                const int8_t * ab = Aq + (size_t)kb * (16*32);
+                for (int nt = 0; nt < 2; ++nt) {
+                    if (nt >= ntiles) break;
+                    const int col = nt*8 + gr;
+                    const int b0 = *(const int *)(ab + col*32 + 4*t);
+                    const int b1 = *(const int *)(ab + col*32 + 4*t + 16);
+                    int d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+                    mma16832(d0, d1, d2, d3, a0, a1, a2, a3, b0, b1);
+                    const float da0 = Ad[kb*16 + nt*8 + 2*t], da1 = Ad[kb*16 + nt*8 + 2*t + 1];
+                    acc[nt][0] = fmaf((float)d0, swA*da0, acc[nt][0]);
+                    acc[nt][1] = fmaf((float)d1, swA*da1, acc[nt][1]);
+                    acc[nt][2] = fmaf((float)d2, swB*da0, acc[nt][2]);
+                    acc[nt][3] = fmaf((float)d3, swB*da1, acc[nt][3]);
+                }
+            }
+            __syncwarp();
+        }
+        for (int nt = 0; nt < 2; ++nt) {
+            if (nt >= ntiles) break;
+            const int c0 = nt*8 + 2*t;
+            float * o0 = out + (size_t)(rt*16 + gr    ) * ostride + c0;
+            float * o1 = out + (size_t)(rt*16 + gr + 8) * ostride + c0;
+            if (c0 + 0 < ncols) { o0[0] = acc[nt][0]; o1[0] = acc[nt][2]; }
+            if (c0 + 1 < ncols) { o0[1] = acc[nt][1]; o1[1] = acc[nt][3]; }
+        }
+    }
+}
+
+template<int TY>
+static void launch_v5(const uint8_t * W, const int8_t * Aq, const float * Ad, const uint2 * mt,
+                      int R, int K, int rb, int ncols, float * out, int gdim, cudaStream_t st) {
+    const int gb = (TY == TY_IQ3S) ? 2048 : (TY == TY_IQ3XXS) ? 1024 : (TY == TY_IQ2S) ? 8192 : 0;
+    const int mb = (TY == TY_IQ3XXS) ? 1024 : 2048;
+    const int shm = gb + mb + 4 * 16 * V5S<TY>::RAW;
+    cudaFuncSetAttribute((const void *)k_mma5<TY>, cudaFuncAttributeMaxDynamicSharedMemorySize, shm);
+    k_mma5<TY><<<gdim, 128, shm, st>>>(W, Aq, Ad, mt, R, K, rb, ncols, 16, out);
+}

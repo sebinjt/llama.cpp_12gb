@@ -1,0 +1,162 @@
+// ---------------------------------------------------------------------------------------------
+// T11 weight staging, M2: stream the tensors of the given blocks through device slots.
+// Opt-in: LLAMA_W_STAGE_BLOCKS="0,1" (block indices); run with LLAMA_CUDA_DISABLE_GRAPHS=1 for now.
+// The streamed tensors keep their identity (same name, same size, same values); only their storage
+// moves to a device slot that is refilled from the mapped GGUF before each pass, so the output must be
+// bit-identical to the same blocks resident on the GPU.
+// ---------------------------------------------------------------------------------------------
+struct ggml_cuda_w_stage_ent {
+    ggml_tensor *         t     = nullptr;
+    ggml_backend_buffer_t buf   = nullptr;
+    const void *          src   = nullptr;
+    size_t                bytes = 0;
+    bool                  reg   = false;
+};
+struct ggml_cuda_w_stage_m2 {
+    std::vector<ggml_cuda_w_stage_ent> ents;
+    cudaStream_t st = nullptr;
+    cudaEvent_t  filled = nullptr;
+    bool inited = false;
+    bool failed = false;
+    size_t total = 0;
+};
+
+static ggml_cuda_w_stage_m2 g_w3;
+
+static bool ggml_cuda_w_stage_wanted(const char * name) {
+    static const std::string blocks = [] { const char * e = getenv("LLAMA_W_STAGE_BLOCKS"); return e ? std::string(e) : std::string(); }();
+    if (blocks.empty() || name == nullptr) {
+        return false;
+    }
+    if (strncmp(name, "blk.", 4) != 0) {
+        return false;
+    }
+    const char * p = name + 4;
+    char * end = nullptr;
+    const long il = strtol(p, &end, 10);
+    if (end == p || *end != '.') {
+        return false;
+    }
+    size_t pos = 0;
+    while (pos < blocks.size()) {
+        size_t komma = blocks.find(',', pos);
+        if (komma == std::string::npos) {
+            komma = blocks.size();
+        }
+        const long v = strtol(blocks.c_str() + pos, nullptr, 10);
+        if (v == il) {
+            return true;
+        }
+        pos = komma + 1;
+    }
+    return false;
+}
+
+// collect the leaf tensors of the requested blocks from the graph and move them to device slots
+static void ggml_cuda_w_stage_m2_init(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
+    if (g_w3.inited || g_w3.failed) {
+        return;
+    }
+    g_w3.inited = true;
+    if (getenv("LLAMA_W_STAGE_BLOCKS") == nullptr) {
+        return;
+    }
+    CUDA_CHECK(cudaStreamCreateWithFlags(&g_w3.st, cudaStreamNonBlocking));
+    CUDA_CHECK(cudaEventCreate(&g_w3.filled));
+
+    std::vector<const ggml_tensor *> candidates;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        for (uint32_t j = 0; j < GGML_MAX_SRC; ++j) {
+            const ggml_tensor * src = node->src[j];
+            if (src == nullptr || src->data == nullptr || src->buffer == nullptr) {
+                continue;
+            }
+            if (!ggml_cuda_w_stage_wanted(src->name)) {
+                continue;
+            }
+            if (ggml_backend_buffer_is_cuda(src->buffer)) {
+                continue;   // already on the device
+            }
+            bool is_node = false;
+            for (int k = 0; k < cgraph->n_nodes; ++k) {
+                if (cgraph->nodes[k] == src) { is_node = true; break; }
+            }
+            if (is_node) {
+                continue;
+            }
+            if (std::find(candidates.begin(), candidates.end(), src) == candidates.end()) {
+                candidates.push_back(src);
+            }
+        }
+    }
+    if (candidates.empty()) {
+        fprintf(stderr, "WSTAGE M2: no streamed tensors found in the graph\n");
+        g_w3.failed = true;
+        return;
+    }
+    for (const ggml_tensor * c : candidates) {
+        ggml_tensor * t = const_cast<ggml_tensor *>(c);
+        ggml_cuda_w_stage_ent e;
+        e.t     = t;
+        e.src   = t->data;                       // mapped GGUF pages
+        e.bytes = ggml_nbytes(t);
+        cudaError_t re = cudaHostRegister(const_cast<void *>(e.src), e.bytes, cudaHostRegisterReadOnly);
+        e.reg = (re == cudaSuccess);
+        if (!e.reg) {
+            fprintf(stderr, "WSTAGE M2: cudaHostRegister failed for %s (%s)\n", t->name, cudaGetErrorString(re));
+            (void) cudaGetLastError();
+        }
+        ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_buffer_type(cuda_ctx->device), e.bytes);
+        if (buf == nullptr) {
+            fprintf(stderr, "WSTAGE M2: slot allocation failed for %s (%.1f MiB)\n", t->name, e.bytes / 1048576.0);
+            g_w3.failed = true;
+            return;
+        }
+        if (ggml_backend_tensor_alloc(buf, t, buf->ptr) != GGML_STATUS_SUCCESS) {
+            fprintf(stderr, "WSTAGE M2: tensor_alloc failed for %s\n", t->name);
+            ggml_backend_buffer_free(buf);
+            g_w3.failed = true;
+            return;
+        }
+        e.buf = buf;
+        g_w3.total += e.bytes;
+        g_w3.ents.push_back(e);
+    }
+    int nreg = 0;
+    for (auto & e : g_w3.ents) nreg += e.reg ? 1 : 0;
+    fprintf(stderr, "WSTAGE M2: %zu tensors streamed, %.1f MiB of slots, %d registered\n",
+            g_w3.ents.size(), g_w3.total / 1048576.0, nreg);
+    fflush(stderr);
+}
+
+// refill every slot from its mapped source; consumers wait on `filled`
+static void ggml_cuda_w_stage_m2_refill(void) {
+    if (!g_w3.inited || g_w3.failed || g_w3.ents.empty()) {
+        return;
+    }
+    CUDA_CHECK(cudaEventRecord(g_w3.filled, g_w3.st));
+    for (auto & e : g_w3.ents) {
+        CUDA_CHECK(cudaMemcpyAsync(e.t->data, e.src, e.bytes, cudaMemcpyHostToDevice, g_w3.st));
+    }
+    CUDA_CHECK(cudaEventRecord(g_w3.filled, g_w3.st));
+}
+
+// a node that reads a streamed tensor waits for the refill
+static void ggml_cuda_w_stage_m2_wait(ggml_backend_cuda_context * cuda_ctx, const ggml_tensor * node) {
+    if (!g_w3.inited || g_w3.failed || g_w3.ents.empty()) {
+        return;
+    }
+    for (uint32_t j = 0; j < GGML_MAX_SRC; ++j) {
+        const ggml_tensor * src = node->src[j];
+        if (src == nullptr) {
+            continue;
+        }
+        for (auto & e : g_w3.ents) {
+            if (e.t == src) {
+                CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), g_w3.filled, 0));
+                return;
+            }
+        }
+    }
+}

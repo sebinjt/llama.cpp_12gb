@@ -1,0 +1,35 @@
+SASS of the v8 (repacked quad-step) kernel - free first gate, taken without running anything on the GPU
+=====================================================================================================
+worker3, seq 74. Built with tests\build_mmsb_bench_v8.bat (nvcc 13.4, -arch=sm_86 -O3 -std=c++17).
+Dump:  "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin\cuobjdump.exe" -sass bin\mmsb_bench_v8.exe
+Counts are instructions between the 256-k block loop head and its back-edge (the 8 32-k steps are fully
+unrolled inside it), divided by 8. Both n-tile bodies (ncols<=8 and the second tile for ncols 9..16) are
+compiled inside the step, so the count below is the ncols=16 code; at ncols=8 the second tile is branched
+over by one `@!P1 BRA` per step.
+
+kernel (mangled)                          instrs / 32-k step    LDG / step   IMMA / step
+_Z8k_mma_v8ILi0E  (IQ3_S)                        124.1             20.2          2.0
+_Z8k_mma_v8ILi1E  (IQ3_XXS)                      116.1             19.2          2.0
+
+Estimates from comm\files\seq74_unpack_explainer.md, for comparison:
+  * instruction estimate there: 14-16 per 32-k step  -> WRONG by ~8x.
+  * issue budget at the read floor: ~108 slots per step (4 schedulers x ~27 cycles).
+  * v1's measured SASS (seq 50, unpack-only variant): 124 instructions and 23 LDG per step.
+  * in-tree MMQ@8: 2.07x (IQ3_S) / 2.04x (IQ3_XXS) of the weight-read floor.
+
+Where the instructions actually go (IQ3_S, per step): LOP3 27, LDG 20, IMAD 20, SHF 11, I2FP 10,
+FFMA 10, FMUL 10, IADD3 5, SEL 4, IMMA 2. The estimate was too optimistic because it assumed ONE
+sign-mask lookup per lane per step and one grid lookup per 4 weights; in fact each lane needs 8 table
+lookups per step (4 iq3s_grid + 4 sign-mask) plus 4 index compositions, and the per-step weight-scale
+math (int->float of the scale nibbles, then 8 fp32 FMAs at ncols>8) is not hoistable because the scale
+nibble changes every step.
+
+What that means for the gate (honest reading):
+  * v8 does NOT reduce instruction count versus v1 (124 vs 124); it removes the 16-sectors-per-load
+    problem, which was v1's binding constraint (23 loads x ~5.5 cycles = ~128 cycles/step against the
+    31 cycles the floor allows). v8's 20 loads are coalesced (4 sectors per warp instruction).
+  * So v8 trades "memory-sector bound at ~25% issue" for "issue bound at 124 instructions/step". If it
+    reaches ~4 IPC it lands at ~31 cycles/step of issue = ~1.15x of the floor, and the 1.18x extra bytes
+    put it at ~1.2-1.4x. That is still 1.5-1.7x better than MMQ@8, but it is a bet on IPC, not on the
+    instruction count. Only the timed run can settle it - hence the pre-set rule in
+    tests\mmsb_bench_v8_RUN.txt is applied to the measured x-of-floor, not to these counts.

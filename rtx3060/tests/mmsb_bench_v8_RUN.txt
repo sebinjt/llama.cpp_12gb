@@ -1,0 +1,60 @@
+v8 gate - exact run command, what it prints, and the PRE-SET decision rule
+=========================================================================
+worker3, seq 74. Prepared without GPU use. Nothing here runs by itself; nothing in the production tree,
+no fork edits, no commits, no deletes. The only new files are:
+  tests\mmsb_bench_v8.cu        copy of tests\mmsb_bench.cu + the v8 path (original untouched)
+  tests\build_mmsb_bench_v8.bat build script (nvcc sm_86)
+  tests\bin\mmsb_bench_v8.exe   built already (compiled, never executed)
+  tests\mmsb_bench_v8_SASS.txt  the free SASS gate (instruction and LDG counts per 32-k step)
+  tests\mmsb_bench_v8_RUN.txt   this file
+
+BUILD (already done; rerun only if the .cu changes)
+  cd C:\Users\sebinj\qwen_inference
+  tests\build_mmsb_bench_v8.bat
+  expected last line: NVCC_RC=0
+
+RUN (about 2-4 minutes of GPU, ~90 MB of VRAM at the largest shape)
+  cd C:\Users\sebinj\qwen_inference
+  set PATH=C:\Users\sebinj\qwen_inference\llama_cpp_src\build-cuda\bin;%PATH%
+  tests\bin\mmsb_bench_v8.exe --v8 --reps 20
+  ( --reps 20 is the default; use --reps 5 for a 30-second smoke run. Without --v8 the exe runs the
+    original v1..v7 sweep instead, which is NOT what this gate wants. )
+
+WHAT IT PRINTS
+  # correctness (R=32, K=512, ncols=8), per type:
+      v1 vs v8 bit diffs: 0                      <- must be 0
+      v8 rel_err vs ggml dequant <1e-7 ok|FAIL   <- must be ok
+      v8 column-invariance: 0 bit diffs ...      <- must be 0
+  then one line per (type, shape, ncols):
+      V8,<type>,<in>x<out>,<ncols>,<bytes_x>,<v1_us>,<v1_x>,<v8_us>,<v8_x>
+    bytes_x = size of the repacked buffer / natural tensor size (1.182 IQ3_S, 1.327 IQ3_XXS)
+    *_x     = time / that tensor's own measured STREAM floor (same definition as the seq-50 tables)
+  covered: IQ3_S and IQ3_XXS, shapes 5120x17408 and 17408x5120, ncols 1, 4, 8, 16.
+  IQ2_S is NOT covered (different slot + two m16n8k16 halves per 32-k block; not cheap). IQ4_XS is not
+  covered either - it has no grid lookup and MMQ@8 is already at 1.08-1.40x, so there is nothing to win.
+
+IF ANY CORRECTNESS LINE IS NON-ZERO OR FAIL: stop, do not read the timings, report it as a kernel bug.
+
+DECISION RULE (written before the run, apply it to the ncols=8 rows, both shapes)
+  reference points, measured earlier: in-tree MMQ@8 = 2.07x (IQ3_S) / 2.04x (IQ3_XXS); v1 = 3.4-4.7x.
+    v8_x <= 1.30 on both shapes   -> real. Expected end-to-end +10-16% at 8K DFlash d7 (101 -> ~86-91
+                                     ms/step, 50.6 -> ~56-58 t/s). Worth productionising behind an env
+                                     var (default path byte-identical), with the lossless bit-exactness
+                                     check kept.
+    1.30 < v8_x <= 1.60           -> marginal: at most +3-8% end to end. Do not productionise; record the
+                                     numbers in report.md and keep the microbench as evidence.
+    v8_x > 1.60                   -> abandon the repack route; the instruction issue cost (124/step, see
+                                     tests\mmsb_bench_v8_SASS.txt) has eaten the sector win.
+  Secondary check (free): the ncols=16 rows. If v8's x at ncols=16 is no worse than at ncols=8, the
+  kernel is bandwidth-bound and the width-16 verify path also gets the win; if it degrades, it is
+  issue-bound and only ncols=8 benefits.
+  Also compare v1's x in the same run against v1's historical 3.4-4.7x: if v1 also moved a lot, the run
+  is thermally throttled or the floor measurement drifted - rerun rather than interpret.
+
+WHY THIS IS WORTH 1-4 MINUTES OF GPU
+  v1's binding constraint was 16 L1 sectors per byte-load instruction (23 loads x ~5.5 cycles = ~128
+  cycles per 32-k step against the 31 cycles the floor allows). v8 keeps 20 loads per step - barely fewer
+  - but each is a 4-sector coalesced transaction. The SASS gate says v8 is now issue-bound at 124
+  instructions/step, so the whole bet is whether it reaches ~4 IPC where v1 sat at ~25% issue. That is a
+  timed measurement, not a projection, and it is the cheapest way to find out whether the repack idea
+  (comm\files\seq74_unpack_explainer.md, section 4) is worth a day of production work.
