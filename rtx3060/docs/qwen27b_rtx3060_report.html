@@ -228,6 +228,22 @@ details[open] > summary { margin-bottom: 10px; }
     <div class="fig"><h3 id="m1pt">Prefill, tokens/s</h3><div class="chartbox"><canvas id="m1p" aria-label="Prefill tokens per second against context length, measured"></canvas></div></div>
   </div>
   <div class="note col" id="m1note"></div>
+  <h3>Without speculative decoding (IQ3_XXS)</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>context</th><th class="n">fork, no spec</th><th class="n">stock, no spec</th><th class="n">fork + DFlash, code</th><th class="n">gain</th><th class="n">fork + DFlash, agent</th></tr></thead>
+    <tbody>
+      <tr><td>8K</td><td class="n">20.64 (48 ms)</td><td class="n">20.6</td><td class="n">54.19</td><td class="n">2.6x</td><td class="n">26.1 (7K-42K)</td></tr>
+      <tr><td>32K</td><td class="n">19.93 (50 ms)</td><td class="n"><em>~17 est.</em></td><td class="n"><em>~51 est.</em></td><td class="n"><em>~2.6x</em></td><td class="n">-</td></tr>
+      <tr><td>64K</td><td class="n">18.99 (53 ms)</td><td class="n"><em>~14 est.</em></td><td class="n">38.51</td><td class="n">2.0x</td><td class="n">23.3 (56K-69K)</td></tr>
+      <tr><td>128K</td><td class="n">13.36 (75 ms)</td><td class="n"><em>~6 est.</em></td><td class="n">35.56</td><td class="n">2.7x</td><td class="n">-</td></tr>
+      <tr><td>200K</td><td class="n">5.50 (182 ms)</td><td class="n"><em>~3 est.</em></td><td class="n">21.06</td><td class="n">3.8x</td><td class="n">-</td></tr>
+    </tbody>
+  </table></div>
+  <div class="col" style="display:grid;gap:8px">
+    <p class="cap">Decode t/s; ms per token in brackets. "Gain" is DFlash on greedy code over no speculation. Measured unless marked <em>est.</em> Without speculation every step yields exactly one token, so these numbers do not depend on the text or the client's sampling. The fork column uses the fastest no-speculation route (fused vector matvecs, the split-K attention kernel, staged KV above 64K); the exact all-MMQ route that speculation needs is slower for single tokens (13.06 / 12.28 / 9.51 t/s at 8K / 64K / 128K) and only matters when drafting. Through llama-server with the exact profile, no-speculation decode measured 12.9-13.2 t/s at 8K.</p>
+    <p class="cap"><strong>Stock estimates:</strong> 8K is the measured stock code path (the fork with every flag off). Above that, stock attention reads the cache with the generic vector kernel (about 0.4 ms per 1K tokens per step, against 0.1 for the fork's kernel), and without a drafter it fits 64K on the card; at 128K and 200K it needs roughly 9 and 24 FFN layers on the CPU at about 7 ms each per token. Rough, not measured.</p>
+    <p class="cap"><strong>What it means for real use:</strong> with thinking on and sampling, DFlash accepts about 3 tokens per step, so the gain over no speculation shrinks to about 1.3x at 8K-64K (26.1 vs ~20 t/s), against 2-4x on greedy code.</p>
+  </div>
   <details><summary>Data table for these charts</summary><div class="tablewrap"><table><thead><tr><th>series</th><th class="n">context</th><th class="n">decode t/s</th><th class="n">prefill t/s</th><th>note</th></tr></thead><tbody id="m1table"></tbody></table></div></details>
 </section>
 
@@ -344,13 +360,13 @@ details[open] > summary { margin-bottom: 10px; }
       <tr><td>IQ3_S 64K profile</td><td>The streamed set measured on restored snapshots (612 MiB) ran out of memory on the first real prefill, because a real request allocates the prefill buffers. Re-sized to 797 MiB streamed and <span class="mono">-ub 32</span>: 27.4 t/s at 12K and 23.65 t/s at 64K.</td></tr>
     </tbody>
   </table></div>
-  <p class="cap">Report section 58. Raw JSON and server logs in <span class="mono">results\rw</span>.</p>
+  <p class="cap">Report section 58.</p>
 </section>
 
 <section id="agent">
   <div class="eyebrow">6b · A real agent session</div>
   <h2>With thinking on, expect 23-26 t/s, not 54</h2>
-  <p class="col">The same IQ3_XXS server (96K context, KV budget 1100 MiB, exact mode), driven by the pi coding agent: about a 6K-token system prompt plus the task, the model's default <span class="mono">xhigh</span> reasoning effort, and the agent's own sampling settings. The task was one long creative coding prompt (a voxel-art HTML scene), followed by the agent's own follow-up turns. Decode numbers are the server's own timings.</p>
+  <p class="col">The same IQ3_XXS server (96K context, KV budget 1100 MiB, exact mode), driven by a coding agent: about a 6K-token system prompt plus the task, the model's default <span class="mono">xhigh</span> reasoning effort, and the agent's own sampling settings. The task was one long creative coding prompt (a voxel-art HTML scene), followed by the agent's own follow-up turns. Decode numbers are the server's own timings.</p>
   <div class="tablewrap"><table>
     <thead><tr><th>run</th><th class="n">context</th><th class="n">generated</th><th class="n">decode t/s</th><th class="n">tokens per step</th><th>decode by quarter of the reply</th></tr></thead>
     <tbody>
@@ -368,7 +384,7 @@ details[open] > summary { margin-bottom: 10px; }
     <p><strong>The levers are on the client.</strong> Temperature 0 and a lower reasoning effort (<span class="mono">medium</span> or <span class="mono">low</span>) raise acceptance; the server configuration is already at its measured step time. This model's chat template accepts only <span class="mono">xhigh</span>, <span class="mono">medium</span> and <span class="mono">low</span>; a client that sends <span class="mono">high</span> gets an HTTP 500.</p>
     <p><strong>One cache miss per conversation.</strong> The agent's second turn re-prefilled the whole conversation (35-42K tokens, about 2 minutes): the history it resent no longer matched the cached prefix, most likely because the previous reply's thinking was dropped. Every later turn reused the cache and prefilled only its new text.</p>
   </div>
-  <p class="cap">Logs: <span class="mono">results\rw\srv_96k_9931.log</span>, <span class="mono">srv_96k_9931_b.log</span>, <span class="mono">srv_96k_9931_mtp.log</span>. One prompt with sampling, so the two drafters produced different texts of different lengths; treat the 5% as indicative.</p>
+  <p class="cap">One prompt with sampling, so the two drafters produced different texts of different lengths; treat the 5% as indicative.</p>
 </section>
 
 <section id="exact">
@@ -377,7 +393,7 @@ details[open] > summary { margin-bottom: 10px; }
   <div class="col" style="display:grid;gap:10px">
     <p><strong>Exact output.</strong> With the recommended configuration, speculative decoding (MTP or DFlash, any draft length) produces the same tokens as plain greedy decoding at 8K, 64K, 128K and 200K. Three things had to change for that: the decode-attention split partition (same for verify and decode at one position), the matmul warp count for 5-8 columns, and one matmul route (MMQ) for every batch width.</p>
     <p><strong>Several prompts, step time first.</strong> A change that alters the matmul route changes the generated text after the first divergence, and the text's draftability then moves t/s by ±15%. Mode decisions were made over five task prompts and judged on milliseconds per step, with accepted tokens per step reported beside it.</p>
-    <p><strong>One GPU user at a time.</strong> Timed runs held a shared GPU lock, and runs that overlapped another job were discarded and repeated.</p>
+    <p><strong>One GPU user at a time.</strong> Timed runs had the GPU to themselves; any run that overlapped another job was discarded and repeated.</p>
     <p><strong>Weights untouched.</strong> No smaller weight quantisation was used anywhere. Numerical shortcuts stay opt-in and gated on a KL-divergence check.</p>
   </div>
   <h3>Open items</h3>
@@ -488,7 +504,7 @@ const tiles = [
   ["128K decode, IQ3_XXS", "35.6", "t/s", "stock at best settings: 4.7 t/s (32 FFN layers on the CPU). Same prompt: fork 30.2, 6.4x."],
   ["200K decode, IQ3_XXS", "21.1", "t/s", "code prompt; 14.2 over five task prompts. Stock: 2.7 t/s; same prompt fork 18.8, 6.9x."],
   ["8K decode, IQ3_S", "49.7", "t/s", "from 19.8 t/s with CPU layers; 29.8 vs 14.6 over five task prompts."],
-  ["Real agent session, IQ3_XXS", "26.1", "t/s", "pi coding agent, xhigh thinking, sampling: 34,935 tokens over 7K-42K context, 3.0 tokens per step."]
+  ["Real agent session, IQ3_XXS", "26.1", "t/s", "coding agent, xhigh thinking, sampling: 34,935 tokens over 7K-42K context, 3.0 tokens per step."]
 ];
 document.getElementById("tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="k">${t[0]}</div><div class="v num">${t[1]} <small>${t[2]}</small></div><div class="d">${t[3]}</div></div>`).join("");
 
@@ -530,7 +546,7 @@ const CHANGES = [
   ["VRAM", "Output head placement (<code>-ot output.weight=CPU</code> or <code>CUDA0</code>)", "the 644 MiB head on the CPU costs ~0.9 ms per token; on the GPU it is faster when VRAM allows", "freed 644 MiB in the MTP-era 200K setup; on the GPU it is +22% at 8K for IQ3_S", "tight VRAM", "14.3, 31"],
   ["VRAM", "Weight streaming: <code>LLAMA_W_STAGE_ENABLE</code>, <code>_BLOCKS</code>, <code>_SLOT_MIB</code>, <code>_PREFETCH</code>", "single big weight tensors (ffn_down), spread every 3-4 layers, stream through 2 x 48 MiB slots from the pinned model file, prefetched inside the CUDA graph", "IQ3_S with no CPU layers: 8K 19.76 to 49.70 t/s (code prompt; 14.58 to 29.84 over five prompts), 64K 13.15 to 25.35, 128K 10.07 to 15.25; the real-server 64K profile needs 797 MiB streamed and -ub 32 (23.65 t/s)", "models larger than VRAM", "55, 58.1"],
   ["VRAM", "Pinned model file mapping (<code>cudaHostRegisterReadOnly</code>)", "pins the mapped GGUF in place so it can be copied at full PCIe rate", "13.3 GB/s instead of 6.6 GB/s pageable; no host mirror copy", "weight streaming", "52"],
-  ["Decode kernel", "<code>LLAMA_FA_DECODE_Q4=1</code>", "new split-K, GQA-packed q4_0 decode attention (CUDA port of the AMD paged-decode design); each KV row is read once for all 6 query heads and all verify tokens, on tensor cores", "per layer at 200K: 4.98 to 0.95 ms (1 token), 24.1 to 1.53 ms (4 tokens); a new 226-token turn at ~199K prefills in 2.3 s instead of 22.8 s", "long-context decode and verify; new turns", "26.2, 26.8"],
+  ["Decode kernel", "<code>LLAMA_FA_DECODE_Q4=1</code>", "new split-K, GQA-packed q4_0 decode attention; each KV row is read once for all 6 query heads and all verify tokens, on tensor cores", "per layer at 200K: 4.98 to 0.95 ms (1 token), 24.1 to 1.53 ms (4 tokens); a new 226-token turn at ~199K prefills in 2.3 s instead of 22.8 s", "long-context decode and verify; new turns", "26.2, 26.8"],
   ["Decode kernel", "<code>GGML_CUDA_PREFER_MMQ=1</code> (skips the fused mul_mat_vec_q paths)", "every small-batch matmul uses MMQ's 8-column tile instead of the vector kernel", "8K +53% (five prompts), 128K +21%, 200K +4.7% (five prompts); also the exact mode", "every context with speculation", "29, 32, 33, 41, 42"],
   ["Decode kernel", "q8 KV: leave <code>LLAMA_FA_VEC_QUANT_KV</code> unset (<code>serve_prod.ps1 -Ctk q8_0</code> does it)", "q8 verify and prefill batches take the MMA kernel instead of the vector kernel, which is fast only for q4_0", "q8_0/q4_0 at 8K: 48.1 to 56.8 t/s decode, 325 to 461 t/s prefill; against q4_0/q4_0 at the same setup -11% at 64K, -32% at 128K", "q8 KV for quality", "60"],
   ["Exactness", "<code>LLAMA_MMVQ_BATCH_INVARIANT=1</code>", "5-8 column batches use the 4-column warp count, so the sum order doesn't depend on batch width", "spec output == greedy output at draft length 4 and up; costs at most 0.6% at 200K", "speculative decoding", "26.7"],
